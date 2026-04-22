@@ -19,16 +19,11 @@ export function usePreferencesState() {
       }
       setPreferences(readPreferences());
     };
-    const syncFromFocus = () => {
-      setPreferences(readPreferences());
-    };
 
     window.addEventListener("storage", syncFromStorage);
-    window.addEventListener("focus", syncFromFocus);
 
     return () => {
       window.removeEventListener("storage", syncFromStorage);
-      window.removeEventListener("focus", syncFromFocus);
     };
   }, []);
 

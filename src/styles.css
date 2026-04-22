@@ -14,6 +14,8 @@
 :root,
 :root[data-theme="light"] {
   --app-bg: #f4f5f7;
+  --window-bg: rgba(250, 251, 253, 0.92);
+  --window-edge: rgba(255, 255, 255, 0.88);
   --panel: rgba(255, 255, 255, 0.88);
   --panel-strong: rgba(255, 255, 255, 0.96);
   --panel-muted: rgba(244, 245, 247, 0.86);
@@ -27,17 +29,19 @@
 }
 
 :root[data-theme="dark"] {
-  --app-bg: #111318;
-  --panel: rgba(28, 32, 39, 0.86);
-  --panel-strong: rgba(34, 38, 47, 0.94);
-  --panel-muted: rgba(23, 26, 33, 0.92);
-  --line: rgba(255, 255, 255, 0.08);
-  --line-strong: rgba(255, 255, 255, 0.12);
+  --app-bg: #161414;
+  --window-bg: rgba(34, 37, 46, 0.94);
+  --window-edge: rgba(255, 255, 255, 0.06);
+  --panel: rgba(39, 44, 56, 0.74);
+  --panel-strong: rgba(42, 48, 61, 0.9);
+  --panel-muted: rgba(47, 53, 67, 0.72);
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.11);
   --text: #f5f7fb;
   --text-soft: #b5bfcb;
-  --text-faint: #8c98a7;
-  --shadow: 0 24px 72px rgba(0, 0, 0, 0.35);
-  --selection: rgba(10, 132, 255, 0.2);
+  --text-faint: #8f98a7;
+  --shadow: 0 18px 42px rgba(0, 0, 0, 0.24);
+  --selection: rgba(92, 132, 204, 0.18);
 }
 
 * {
@@ -53,8 +57,8 @@ body,
 body {
   margin: 0;
   background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.4), transparent 24%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.1), transparent 28%),
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.08), transparent 18%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 22%),
     var(--app-bg);
   color: var(--text);
 }
@@ -73,12 +77,39 @@ button {
 input,
 select {
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel-strong);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.01)),
+    var(--panel-strong);
   color: var(--text);
-  padding: 10px 12px;
+  min-height: 42px;
+  padding: 10px 14px;
   outline: none;
-  transition: border-color 160ms ease, box-shadow 160ms ease;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 42px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, color-mix(in srgb, var(--text-soft) 82%, transparent) 50%),
+    linear-gradient(135deg, color-mix(in srgb, var(--text-soft) 82%, transparent) 50%, transparent 50%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.01));
+  background-position:
+    calc(100% - 18px) calc(50% - 3px),
+    calc(100% - 12px) calc(50% - 3px),
+    0 0;
+  background-size: 6px 6px, 6px 6px, 100% 100%;
+  background-repeat: no-repeat;
+}
+
+select:hover,
+input:hover {
+  border-color: var(--line-strong);
 }
 
 input:focus,
@@ -89,35 +120,42 @@ select:focus {
 
 .window-shell {
   min-height: 100vh;
-  padding: 22px;
+  padding: 0;
 }
 
 .window-content {
-  min-height: calc(100vh - 44px);
+  min-height: 100vh;
   display: grid;
   gap: 16px;
+  padding: 18px;
+  background:
+    radial-gradient(circle at top left, rgba(88, 121, 181, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 16%),
+    var(--window-bg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  overflow: hidden;
 }
 
 .main-window {
   grid-template-rows: auto minmax(0, 1fr);
+  border-radius: 0;
 }
 
 .utility-content,
 .settings-content {
   grid-template-rows: auto minmax(0, 1fr);
+  border-radius: 0;
 }
 
-.app-toolbar,
 .pane,
 .summary-card {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  box-shadow: var(--shadow);
+  background: rgba(255, 255, 255, 0.018);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 20px;
+  box-shadow: none;
   backdrop-filter: blur(20px);
 }
 
-.app-toolbar,
 .utility-header {
   display: flex;
   justify-content: space-between;
@@ -126,11 +164,12 @@ select:focus {
 }
 
 .app-toolbar {
-  padding: 18px;
+  padding: 6px 6px 14px;
   display: grid;
   grid-template-columns: minmax(320px, 0.9fr) minmax(420px, 1.1fr);
   gap: 18px;
   align-items: stretch;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .toolbar-copy,
@@ -149,6 +188,20 @@ select:focus {
   align-items: center;
 }
 
+.app-brand-mark {
+  width: 74px;
+  height: 74px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
+    rgba(255, 255, 255, 0.015);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
 .app-brand-copy {
   display: grid;
   gap: 4px;
@@ -156,11 +209,11 @@ select:focus {
 }
 
 .app-brand-logo {
-  width: 80px;
-  height: 80px;
+  width: 58px;
+  height: 58px;
   flex: 0 0 auto;
   display: block;
-  filter: drop-shadow(0 10px 22px rgba(24, 74, 144, 0.14));
+  filter: drop-shadow(0 10px 18px rgba(15, 23, 42, 0.14));
 }
 
 .toolbar-kicker {
@@ -238,13 +291,11 @@ h3 {
 }
 
 .hero-panel {
-  background:
-    radial-gradient(circle at top left, rgba(10, 132, 255, 0.12), transparent 48%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 55%),
-    var(--panel-strong);
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  padding: 18px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 8px 4px 0;
+  box-shadow: none;
 }
 
 .hero-metrics {
@@ -257,10 +308,8 @@ h3 {
   min-width: 0;
   padding: 14px 16px;
   border-radius: 16px;
-  border: 1px solid var(--line);
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.04), transparent 70%),
-    var(--panel-strong);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.02);
   display: grid;
   gap: 6px;
 }
@@ -293,12 +342,13 @@ h3 {
 
 .github-card {
   width: 100%;
-  background: var(--panel-strong);
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  padding: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 24px;
+  padding: 18px;
   display: grid;
   gap: 14px;
+  box-shadow: none;
 }
 
 .github-card-head,
@@ -378,9 +428,9 @@ h3 {
 .filter-chip,
 .danger-button,
 .icon-button {
-  background: var(--panel-strong);
+  background: rgba(255, 255, 255, 0.03);
   color: var(--text);
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .icon-button {
@@ -453,10 +503,12 @@ h3 {
 
 .pane {
   min-height: 0;
-  padding: 16px;
+  padding: 18px;
   display: grid;
   gap: 14px;
   align-content: start;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.018);
 }
 
 .pane-header,
@@ -530,10 +582,11 @@ h3 {
   display: grid;
   gap: 10px;
   text-align: left;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.015);
   border: 1px solid transparent;
   border-radius: 14px;
   padding: 12px;
+  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
 }
 
 .skill-row {
@@ -544,12 +597,14 @@ h3 {
 .skill-row:hover,
 .root-row:hover {
   background: var(--panel-muted);
+  border-color: rgba(255, 255, 255, 0.04);
 }
 
 .skill-row.active,
 .root-row.active {
   background: var(--selection);
-  border-color: rgba(10, 132, 255, 0.22);
+  border-color: rgba(114, 153, 223, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .skill-check {
@@ -624,10 +679,10 @@ h3 {
 }
 
 .inspector-section {
-  background: var(--panel-strong);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 14px;
+  background: rgba(255, 255, 255, 0.014);
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  border-radius: 20px;
+  padding: 16px;
   display: grid;
   gap: 14px;
 }
@@ -711,11 +766,13 @@ h3 {
 
 .preferences-frame {
   min-height: 0;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(20px);
+  background:
+    radial-gradient(circle at top left, rgba(89, 121, 188, 0.12), transparent 30%),
+    var(--window-bg);
+  border: 1px solid var(--window-edge);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: blur(26px);
   overflow: hidden;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -727,8 +784,8 @@ h3 {
   gap: 8px;
   padding: 14px 18px 12px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 100%),
-    rgba(0, 0, 0, 0.08);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 100%),
+    rgba(0, 0, 0, 0.06);
   border-bottom: 1px solid var(--line);
 }
 
@@ -752,8 +809,8 @@ h3 {
 }
 
 .preferences-tab.active {
-  background: rgba(10, 132, 255, 0.16);
-  color: var(--accent);
+  background: rgba(92, 132, 204, 0.18);
+  color: #d7e5ff;
 }
 
 .preferences-tab-icon {
@@ -848,7 +905,7 @@ h3 {
   border: 1px solid var(--line);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 100%),
-    var(--panel-strong);
+    rgba(255, 255, 255, 0.02);
   color: var(--text);
   display: grid;
   justify-items: start;
@@ -871,10 +928,10 @@ h3 {
 
 .choice-button.active {
   background:
-    linear-gradient(180deg, rgba(10, 132, 255, 0.16), rgba(10, 132, 255, 0.04)),
-    var(--panel-strong);
-  border-color: rgba(10, 132, 255, 0.32);
-  box-shadow: 0 12px 28px rgba(10, 132, 255, 0.12);
+    linear-gradient(180deg, rgba(92, 132, 204, 0.18), rgba(92, 132, 204, 0.05)),
+    rgba(255, 255, 255, 0.02);
+  border-color: rgba(114, 153, 223, 0.3);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
 }
 
 .choice-button-icon {
@@ -888,8 +945,8 @@ h3 {
 }
 
 .choice-button.active .choice-button-icon {
-  background: rgba(10, 132, 255, 0.16);
-  color: var(--accent-strong);
+  background: rgba(92, 132, 204, 0.16);
+  color: #dce9ff;
 }
 
 .choice-button-icon svg {
@@ -955,7 +1012,7 @@ h3 {
 
 @media (max-width: 760px) {
   .window-shell {
-    padding: 14px;
+    padding: 0;
   }
 
   .app-toolbar,
@@ -1018,6 +1075,11 @@ h3 {
   }
 
   .app-brand-logo {
+    width: 54px;
+    height: 54px;
+  }
+
+  .app-brand-mark {
     width: 68px;
     height: 68px;
   }

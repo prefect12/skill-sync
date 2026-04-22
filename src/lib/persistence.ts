@@ -1,11 +1,14 @@
 import type {
   AppPreferences,
+  BuiltInRootOverride,
   DefaultInstallRoots,
+  KnownSyncedEntries,
   Language,
   SkillRootConfig
 } from "./types";
 
 export const CUSTOM_ROOTS_KEY = "skill-sync/custom-roots";
+export const BUILT_IN_ROOT_OVERRIDES_KEY = "skill-sync/built-in-root-overrides";
 export const REPO_URL_KEY = "skill-sync/repo-url";
 export const SYNCED_IDS_KEY = "skill-sync/known-synced-ids";
 export const DEFAULT_INSTALL_ROOTS_KEY = "skill-sync/default-install-roots";
@@ -69,11 +72,42 @@ export function writeLastGitHubOwner(owner: string) {
 }
 
 export function readRootConfigs() {
-  return readJson<SkillRootConfig[]>(CUSTOM_ROOTS_KEY, []);
+  return readJson<SkillRootConfig[]>(CUSTOM_ROOTS_KEY, []).filter(
+    (root) => root.kind === "custom"
+  );
 }
 
 export function writeRootConfigs(roots: SkillRootConfig[]) {
   writeJson(CUSTOM_ROOTS_KEY, roots);
+}
+
+export function readBuiltInRootOverrides() {
+  const stored = readJson<Record<string, BuiltInRootOverride>>(
+    BUILT_IN_ROOT_OVERRIDES_KEY,
+    {}
+  );
+  const legacyRoots = readJson<SkillRootConfig[]>(CUSTOM_ROOTS_KEY, []).filter(
+    (root) => root.kind !== "custom"
+  );
+
+  const legacyOverrides = Object.fromEntries(
+    legacyRoots.map((root) => [
+      root.id,
+      {
+        label: root.label,
+        providerHint: root.providerHint,
+        localPath: root.localPath,
+        remotePath: root.remotePath,
+        enabled: root.enabled
+      } satisfies BuiltInRootOverride
+    ])
+  );
+
+  return { ...legacyOverrides, ...stored };
+}
+
+export function writeBuiltInRootOverrides(overrides: Record<string, BuiltInRootOverride>) {
+  writeJson(BUILT_IN_ROOT_OVERRIDES_KEY, overrides);
 }
 
 export function readRepoUrl() {
@@ -85,11 +119,15 @@ export function writeRepoUrl(repoUrl: string) {
 }
 
 export function readKnownSyncedIds() {
-  return new Set(readJson<string[]>(SYNCED_IDS_KEY, []));
+  const stored = readJson<KnownSyncedEntries | string[]>(SYNCED_IDS_KEY, []);
+  if (Array.isArray(stored)) {
+    return Object.fromEntries(stored.map((id) => [id, true])) as KnownSyncedEntries;
+  }
+  return stored;
 }
 
-export function writeKnownSyncedIds(ids: Set<string>) {
-  writeJson(SYNCED_IDS_KEY, Array.from(ids));
+export function writeKnownSyncedIds(entries: KnownSyncedEntries) {
+  writeJson(SYNCED_IDS_KEY, entries);
 }
 
 export function readDefaultInstallRoots() {
@@ -107,6 +145,23 @@ export function uniqueRoots(roots: SkillRootConfig[]) {
   const map = new Map<string, SkillRootConfig>();
   roots.forEach((root) => map.set(root.id, root));
   return Array.from(map.values());
+}
+
+export function mergeRootConfigs(
+  discoveredRoots: SkillRootConfig[],
+  customRoots: SkillRootConfig[],
+  builtInOverrides: Record<string, BuiltInRootOverride>
+) {
+  const mergedDiscoveredRoots = discoveredRoots.map((root) =>
+    root.kind === "custom"
+      ? root
+      : {
+          ...root,
+          ...builtInOverrides[root.id]
+        }
+  );
+
+  return uniqueRoots([...mergedDiscoveredRoots, ...customRoots]);
 }
 
 export function sanitizeId(input: string) {

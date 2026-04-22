@@ -1,8 +1,14 @@
 import { useEffect, useLayoutEffect } from "react";
 import { MainSyncWindow } from "./components/MainSyncWindow";
 import { RootsWindow } from "./components/RootsWindow";
+import { MENU_COMMAND_EVENT, type MenuCommand } from "./lib/menu";
 import { SettingsWindow } from "./components/SettingsWindow";
-import { getWindowView, revealCurrentAppWindow } from "./lib/windowing";
+import {
+  getWindowView,
+  isTauriRuntime,
+  openAppWindow,
+  revealCurrentAppWindow
+} from "./lib/windowing";
 import { usePreferencesState } from "./state/usePreferencesState";
 
 function resolveTheme(appearance: "system" | "light" | "dark") {
@@ -37,6 +43,38 @@ export default function App() {
 
   useEffect(() => {
     void revealCurrentAppWindow();
+
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const unsubscribe = await listen<MenuCommand>(MENU_COMMAND_EVENT, (event) => {
+        if (event.payload === "open-roots") {
+          void openAppWindow("roots");
+        }
+
+        if (event.payload === "open-settings") {
+          void openAppWindow("settings");
+        }
+      });
+
+      if (disposed) {
+        unsubscribe();
+        return;
+      }
+
+      unlisten = unsubscribe;
+    })();
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   if (view === "roots") {

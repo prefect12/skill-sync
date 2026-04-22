@@ -8,18 +8,25 @@ import {
   shouldUseGitHubPicker
 } from "../lib/github";
 import { getMessages } from "../lib/i18n";
+import { MENU_COMMAND_EVENT, type MenuCommand } from "../lib/menu";
 import {
+  mergeRootConfigs,
   readDefaultInstallRoots,
   readKnownSyncedIds,
+  readBuiltInRootOverrides,
   readLastGitHubOwner,
   readRepoUrl,
   readRootConfigs,
-  uniqueRoots,
   writeKnownSyncedIds,
   writeLastGitHubOwner,
   writeRepoUrl
 } from "../lib/persistence";
-import { flattenSkillRows, buildRootGroups, needsReview } from "../lib/status";
+import {
+  flattenSkillRows,
+  buildRootGroups,
+  needsReview,
+  reconcileKnownSyncedEntries
+} from "../lib/status";
 import {
   discoverRoots,
   loadGitHubOwners,
@@ -31,6 +38,7 @@ import {
   syncSelectedItems,
   validateGitHubRepository
 } from "../lib/tauri";
+import { isTauriRuntime } from "../lib/windowing";
 import type {
   AppPreferences,
   GitHubOwner,
@@ -73,6 +81,23 @@ function matchesFilter(state: SyncState, filter: MainFilter) {
     default:
       return true;
   }
+}
+
+function createLoadLogger(label: string) {
+  const startedAt = performance.now();
+  let checkpoint = startedAt;
+
+  function step(message: string) {
+    const now = performance.now();
+    const delta = Math.round(now - checkpoint);
+    const total = Math.round(now - startedAt);
+    checkpoint = now;
+    const entry = `${label}: ${message} (+${delta}ms, ${total}ms total)`;
+    console.info(`[SkillSync] ${entry}`);
+    return entry;
+  }
+
+  return { step };
 }
 
 export function useSkillSyncState(preferences: AppPreferences) {
@@ -187,38 +212,36 @@ export function useSkillSyncState(preferences: AppPreferences) {
     overrideRepoUrl?: string,
     ownerOverride?: string
   ) {
+    const logger = createLoadLogger(
+      overrideRoots || overrideRepoUrl !== undefined || ownerOverride ? "Reload" : "Startup"
+    );
     const localRepoUrl = overrideRepoUrl ?? repoUrl;
     const customRoots = readRootConfigs();
+    const builtInOverrides = readBuiltInRootOverrides();
     let discovered = fallbackRoots();
-    let local = fallbackLocalSnapshots(
-      overrideRoots ?? uniqueRoots([...fallbackRoots().roots, ...customRoots])
-    );
-    let remote = fallbackRemoteSnapshot(
-      overrideRoots ?? uniqueRoots([...fallbackRoots().roots, ...customRoots])
-    );
+    let mergedRoots = overrideRoots ?? mergeRootConfigs(fallbackRoots().roots, customRoots, builtInOverrides);
+    let local = fallbackLocalSnapshots(mergedRoots);
+    let remote = fallbackRemoteSnapshot(mergedRoots);
     const mergedNotes: string[] = [];
 
-    const github = await loadGitHubContext(localRepoUrl, ownerOverride);
-    mergedNotes.push(...github.notes);
+    const githubPromise = loadGitHubContext(localRepoUrl, ownerOverride);
 
     try {
       discovered = await discoverRoots();
       mergedNotes.push(...discovered.notes);
+      mergedNotes.push(logger.step(`discovered ${discovered.roots.length} root(s)`));
     } catch (error) {
       if (!isPreviewRuntimeError(error)) {
         mergedNotes.push(String(error));
       }
     }
 
-    const mergedRoots = uniqueRoots([
-      ...(overrideRoots ?? []),
-      ...discovered.roots,
-      ...customRoots
-    ]);
+    mergedRoots = overrideRoots ?? mergeRootConfigs(discovered.roots, customRoots, builtInOverrides);
     setRootConfigs(mergedRoots);
 
     try {
       local = await scanLocalRoots(mergedRoots);
+      mergedNotes.push(logger.step(`scanned ${local.length} local root snapshot(s)`));
     } catch (error) {
       if (!isPreviewRuntimeError(error)) {
         mergedNotes.push(String(error));
@@ -226,11 +249,20 @@ export function useSkillSyncState(preferences: AppPreferences) {
       local = fallbackLocalSnapshots(mergedRoots);
     }
 
+    setLocalSnapshots(local);
+    setRemoteSnapshots([]);
+    setNotes([...mergedNotes]);
+
+    const github = await githubPromise;
+    mergedNotes.push(...github.notes);
+    mergedNotes.push(logger.step("loaded GitHub context"));
+
     if (localRepoUrl.trim() && !github.repoError) {
       try {
         const payload = await loadRemoteSnapshot(localRepoUrl, mergedRoots);
         remote = payload;
         mergedNotes.push(...payload.notes);
+        mergedNotes.push(logger.step(`loaded ${payload.roots.length} remote root snapshot(s)`));
       } catch (error) {
         if (!isPreviewRuntimeError(error)) {
           mergedNotes.push(String(error));
@@ -246,6 +278,12 @@ export function useSkillSyncState(preferences: AppPreferences) {
     setLocalSnapshots(local);
     setRemoteSnapshots(remote.roots);
     setNotes(mergedNotes.concat(remote.notes));
+
+    return {
+      rootConfigs: mergedRoots,
+      localSnapshots: local,
+      remoteSnapshots: remote.roots
+    };
   }
 
   useEffect(() => {
@@ -265,11 +303,9 @@ export function useSkillSyncState(preferences: AppPreferences) {
     };
 
     window.addEventListener("storage", syncFromStorage);
-    window.addEventListener("focus", syncFromStorage);
 
     return () => {
       window.removeEventListener("storage", syncFromStorage);
-      window.removeEventListener("focus", syncFromStorage);
     };
   }, [repoUrl, preferences.language]);
 
@@ -421,14 +457,25 @@ export function useSkillSyncState(preferences: AppPreferences) {
       setRemoteSnapshots((current) =>
         result.remoteRoots.length ? result.remoteRoots : current
       );
-      const nextSynced = new Set(knownSyncedIds);
-      result.syncedRowIds.forEach((id) => nextSynced.add(id));
-      setKnownSyncedIds(nextSynced);
-      writeKnownSyncedIds(nextSynced);
       setNotes((current) => current.concat(result.notes));
       setSelectedIds(new Set());
       setReviewDecisions({});
-      await loadAll(rootConfigs, repoUrl, selectedOwner);
+      const refreshed = await loadAll(rootConfigs, repoUrl, selectedOwner);
+      const refreshedRows = flattenSkillRows(
+        buildRootGroups(
+          refreshed.rootConfigs,
+          refreshed.localSnapshots,
+          refreshed.remoteSnapshots,
+          knownSyncedIds
+        )
+      ).map((item) => item.row);
+      const nextSynced = reconcileKnownSyncedEntries(
+        knownSyncedIds,
+        refreshedRows,
+        result.syncedRowIds
+      );
+      setKnownSyncedIds(nextSynced);
+      writeKnownSyncedIds(nextSynced);
     } catch (error) {
       setNotes((current) => current.concat(String(error)));
     }
@@ -508,6 +555,40 @@ export function useSkillSyncState(preferences: AppPreferences) {
     filteredRows.length > 0 && visibleSelectedCount === filteredRows.length;
   const canSync =
     Boolean(repoUrl.trim()) && !repoUrlError && !syncBlockedByPermission;
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const unsubscribe = await listen<MenuCommand>(MENU_COMMAND_EVENT, (event) => {
+        if (event.payload === "refresh") {
+          refresh();
+        }
+
+        if (event.payload === "sync-selected") {
+          syncSelected();
+        }
+      });
+
+      if (disposed) {
+        unsubscribe();
+        return;
+      }
+
+      unlisten = unsubscribe;
+    })();
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [repoUrl, selectedOwner, repoUrlError, syncBlockedByPermission, selectedIds, reviewDecisions]);
 
   return {
     messages,

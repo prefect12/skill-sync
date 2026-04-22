@@ -1,4 +1,5 @@
 import type {
+  KnownSyncedEntries,
   LocalRootSnapshot,
   RemoteRootSnapshot,
   RootGroup,
@@ -12,7 +13,22 @@ function sortRows(rows: SkillRow[]): SkillRow[] {
   return [...rows].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function pickState(row: SkillRow, knownSynced: Set<string>): SyncState {
+function shouldKeepPendingDelete(
+  rememberedHash: string | true | undefined,
+  currentHash: string
+) {
+  if (!rememberedHash) {
+    return false;
+  }
+
+  if (rememberedHash === true) {
+    return true;
+  }
+
+  return rememberedHash === currentHash;
+}
+
+function pickState(row: SkillRow, knownSynced: KnownSyncedEntries): SyncState {
   if (row.local && row.remote) {
     if (row.local.contentHash === row.remote.contentHash) {
       return "in-sync";
@@ -28,11 +44,15 @@ function pickState(row: SkillRow, knownSynced: Set<string>): SyncState {
   }
 
   if (row.local && !row.remote) {
-    return knownSynced.has(row.id) ? "pending-delete" : "only-local";
+    return shouldKeepPendingDelete(knownSynced[row.id], row.local.contentHash)
+      ? "pending-delete"
+      : "only-local";
   }
 
   if (!row.local && row.remote) {
-    return knownSynced.has(row.id) ? "pending-delete" : "only-remote";
+    return shouldKeepPendingDelete(knownSynced[row.id], row.remote.contentHash)
+      ? "pending-delete"
+      : "only-remote";
   }
 
   return "conflict";
@@ -55,7 +75,7 @@ export function buildRootGroups(
   roots: SkillRootConfig[],
   localSnapshots: LocalRootSnapshot[],
   remoteSnapshots: RemoteRootSnapshot[],
-  knownSyncedIds: Set<string>
+  knownSyncedEntries: KnownSyncedEntries
 ): RootGroup[] {
   return roots.map((root) => {
     const localSnapshot = localSnapshots.find((item) => item.rootId === root.id);
@@ -78,7 +98,7 @@ export function buildRootGroups(
         state: "conflict"
       };
 
-      row.state = pickState(row, knownSyncedIds);
+      row.state = pickState(row, knownSyncedEntries);
       row.recommendedAction = recommendedAction(row.state);
 
       return row;
@@ -90,6 +110,62 @@ export function buildRootGroups(
       existsLocally: Boolean(localSnapshot?.exists)
     };
   });
+}
+
+export function reconcileKnownSyncedEntries(
+  current: KnownSyncedEntries,
+  rows: SkillRow[],
+  syncedRowIds?: Iterable<string>
+) {
+  const next: KnownSyncedEntries = {};
+  const rowMap = new Map(rows.map((row) => [row.id, row]));
+  const syncedSet = syncedRowIds ? new Set(syncedRowIds) : null;
+
+  Object.entries(current).forEach(([id, rememberedHash]) => {
+    const row = rowMap.get(id);
+    if (!row) {
+      next[id] = rememberedHash;
+      return;
+    }
+
+    if (row.local && row.remote && row.local.contentHash === row.remote.contentHash) {
+      next[id] = row.local.contentHash;
+      return;
+    }
+
+    if (row.state === "pending-delete") {
+      next[id] = row.local?.contentHash ?? row.remote?.contentHash ?? rememberedHash;
+    }
+  });
+
+  if (syncedSet) {
+    syncedSet.forEach((id) => {
+      const row = rowMap.get(id);
+      if (!row) {
+        delete next[id];
+        return;
+      }
+
+      if (row.local && row.remote && row.local.contentHash === row.remote.contentHash) {
+        next[id] = row.local.contentHash;
+        return;
+      }
+
+      if (row.local && !row.remote) {
+        next[id] = row.local.contentHash;
+        return;
+      }
+
+      if (!row.local && row.remote) {
+        next[id] = row.remote.contentHash;
+        return;
+      }
+
+      delete next[id];
+    });
+  }
+
+  return next;
 }
 
 export function summarizeRoot(group: RootGroup) {

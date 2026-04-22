@@ -10,6 +10,14 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::menu::{AboutMetadataBuilder, MenuBuilder, SubmenuBuilder};
+use tauri::Emitter;
+
+const MENU_OPEN_ROOTS: &str = "open-roots";
+const MENU_OPEN_SETTINGS: &str = "open-settings";
+const MENU_REFRESH: &str = "refresh";
+const MENU_SYNC_SELECTED: &str = "sync-selected";
+const MENU_EVENT_NAME: &str = "skillsync://menu-command";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -197,6 +205,10 @@ const GH_ENV: [(&str, &str); 2] = [
     ("GH_HOST", GITHUB_HOST),
     ("GH_PROMPT_DISABLED", "1"),
 ];
+const GIT_ENV: [(&str, &str); 2] = [
+    ("GIT_TERMINAL_PROMPT", "0"),
+    ("GCM_INTERACTIVE", "Never"),
+];
 
 impl CommandError {
     fn into_message(self) -> String {
@@ -243,10 +255,16 @@ fn normalize_remote_path(input: &str) -> Result<String, String> {
 
 fn workspace_path_for_home(home: &Path, repo_url: &str) -> PathBuf {
     let mut hasher = DefaultHasher::new();
-    repo_url.hash(&mut hasher);
+    repo_workspace_key(repo_url).hash(&mut hasher);
     let hash = hasher.finish();
     home.join("Library/Application Support/SkillSync/repos")
         .join(format!("{hash}"))
+}
+
+fn repo_workspace_key(repo_url: &str) -> String {
+    parse_repo_url(repo_url)
+        .map(|validation| validation.full_name)
+        .unwrap_or_else(|_| repo_url.trim().to_string())
 }
 
 fn normalize_repo_full_name(input: &str) -> Result<String, String> {
@@ -561,13 +579,46 @@ fn skill_sync_workspace(repo_url: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn fallback_binary_locations(binary: &str) -> &'static [&'static str] {
+    match binary {
+        "gh" => &["/opt/homebrew/bin/gh", "/usr/local/bin/gh"],
+        "git" => &["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"],
+        _ => &[],
+    }
+}
+
+fn resolve_command_binary(binary: &str) -> String {
+    if binary.contains('/') {
+        return binary.to_string();
+    }
+
+    if let Some(path) = std::env::var_os("PATH") {
+        for candidate in std::env::split_paths(&path) {
+            let resolved = candidate.join(binary);
+            if resolved.is_file() {
+                return resolved.to_string_lossy().to_string();
+            }
+        }
+    }
+
+    for candidate in fallback_binary_locations(binary) {
+        let path = Path::new(candidate);
+        if path.is_file() {
+            return candidate.to_string();
+        }
+    }
+
+    binary.to_string()
+}
+
 fn run_command_with_env(
     binary: &str,
     repo_dir: Option<&Path>,
     args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<CommandResponse, CommandError> {
-    let mut command = Command::new(binary);
+    let resolved_binary = resolve_command_binary(binary);
+    let mut command = Command::new(&resolved_binary);
     if let Some(repo_dir) = repo_dir {
         command.arg("-C").arg(repo_dir);
     }
@@ -579,8 +630,13 @@ fn run_command_with_env(
     let output = command
         .output()
         .map_err(|error| match error.kind() {
-            ErrorKind::NotFound => CommandError::NotFound(format!("{binary} is not installed or not on PATH.")),
-            _ => CommandError::Failed(format!("Failed to start {binary} {:?}: {error}", args)),
+            ErrorKind::NotFound => {
+                CommandError::NotFound(format!("{binary} is not installed or not on PATH."))
+            }
+            _ => CommandError::Failed(format!(
+                "Failed to start {binary} ({resolved_binary}) {:?}: {error}",
+                args
+            )),
         })?;
 
     Ok(CommandResponse {
@@ -610,12 +666,8 @@ fn run_command_checked_with_env(
     Ok(response.stdout)
 }
 
-fn run_command_checked(binary: &str, repo_dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
-    run_command_checked_with_env(binary, repo_dir, args, &[])
-}
-
 fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
-    run_command_checked("git", repo_dir, args)
+    run_command_checked_with_env("git", repo_dir, args, &GIT_ENV)
 }
 
 fn run_gh(args: &[&str]) -> Result<String, String> {
@@ -681,21 +733,89 @@ fn github_status_from_auth_response(
     }
 }
 
+fn git_candidate_urls(repo_url: &str) -> Vec<String> {
+    let mut candidates = vec![repo_url.trim().to_string()];
+
+    if let Ok(validation) = parse_repo_url(repo_url) {
+        if let Some(ssh_url) = validation.ssh_url {
+            if !candidates.contains(&ssh_url) {
+                candidates.push(ssh_url);
+            }
+        }
+
+        if !candidates.contains(&validation.url) {
+            candidates.push(validation.url);
+        }
+    }
+
+    candidates
+}
+
+fn clone_repo_with_fallback(repo_dir: &Path, repo_url: &str) -> Result<(), String> {
+    let mut failures = vec![];
+
+    for candidate in git_candidate_urls(repo_url) {
+        match run_git(
+            None,
+            &[
+                "clone",
+                &candidate,
+                repo_dir
+                    .to_str()
+                    .ok_or_else(|| "Invalid clone path".to_string())?,
+            ],
+        ) {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                let _ = remove_path_if_exists(repo_dir);
+                failures.push(format!("{candidate}: {error}"));
+            }
+        }
+    }
+
+    Err(format!(
+        "Failed to clone GitHub repository. Tried:\n{}",
+        failures.join("\n")
+    ))
+}
+
+fn refresh_repo_with_fallback(repo_dir: &Path, repo_url: &str) -> Result<(), String> {
+    let existing_origin = run_git(Some(repo_dir), &["remote", "get-url", "origin"]).ok();
+    let mut candidates = vec![];
+
+    if let Some(origin) = existing_origin {
+        candidates.push(origin);
+    }
+
+    for candidate in git_candidate_urls(repo_url) {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+
+    let mut failures = vec![];
+
+    for candidate in candidates {
+        run_git(Some(repo_dir), &["remote", "set-url", "origin", &candidate])?;
+
+        match run_git(Some(repo_dir), &["pull", "--ff-only"]) {
+            Ok(_) => return Ok(()),
+            Err(error) => failures.push(format!("{candidate}: {error}")),
+        }
+    }
+
+    Err(format!(
+        "Failed to update GitHub repository. Tried:\n{}",
+        failures.join("\n")
+    ))
+}
+
 fn ensure_repo_clone(repo_url: &str) -> Result<PathBuf, String> {
     let workspace = skill_sync_workspace(repo_url)?;
     let repo_dir = workspace.join("repo");
 
     if !repo_dir.exists() {
-        run_git(
-            None,
-            &[
-                "clone",
-                repo_url,
-                repo_dir
-                    .to_str()
-                    .ok_or_else(|| "Invalid clone path".to_string())?,
-            ],
-        )?;
+        clone_repo_with_fallback(&repo_dir, repo_url)?;
         return Ok(repo_dir);
     }
 
@@ -706,7 +826,7 @@ fn ensure_repo_clone(repo_url: &str) -> Result<PathBuf, String> {
         ));
     }
 
-    let _ = run_git(Some(&repo_dir), &["pull", "--ff-only"]);
+    refresh_repo_with_fallback(&repo_dir, repo_url)?;
     Ok(repo_dir)
 }
 
@@ -1197,6 +1317,88 @@ fn sync_selected_items(
 
 fn main() -> io::Result<()> {
     tauri::Builder::default()
+        .setup(|app| {
+            let app_name = app.package_info().name.clone();
+            let about = AboutMetadataBuilder::new()
+                .name(Some(app_name.clone()))
+                .version(Some(app.package_info().version.to_string()))
+                .build();
+
+            let menu = MenuBuilder::new(app)
+                .item(
+                    &SubmenuBuilder::new(app, &app_name)
+                        .about(Some(about))
+                        .separator()
+                        .text(MENU_OPEN_ROOTS, "Skill Locations")
+                        .text(MENU_OPEN_SETTINGS, "Settings")
+                        .separator()
+                        .services()
+                        .separator()
+                        .hide()
+                        .hide_others()
+                        .show_all()
+                        .separator()
+                        .quit()
+                        .build()?,
+                )
+                .item(
+                    &SubmenuBuilder::new(app, "File")
+                        .text(MENU_REFRESH, "Refresh")
+                        .text(MENU_SYNC_SELECTED, "Sync Selected")
+                        .separator()
+                        .text(MENU_OPEN_ROOTS, "Skill Locations")
+                        .text(MENU_OPEN_SETTINGS, "Settings")
+                        .separator()
+                        .close_window()
+                        .build()?,
+                )
+                .item(
+                    &SubmenuBuilder::new(app, "Edit")
+                        .undo()
+                        .redo()
+                        .separator()
+                        .cut()
+                        .copy()
+                        .paste()
+                        .select_all()
+                        .build()?,
+                )
+                .item(
+                    &SubmenuBuilder::new(app, "View")
+                        .text(MENU_REFRESH, "Refresh")
+                        .separator()
+                        .fullscreen()
+                        .build()?,
+                )
+                .item(
+                    &SubmenuBuilder::new(app, "Window")
+                        .minimize()
+                        .maximize()
+                        .separator()
+                        .text(MENU_OPEN_ROOTS, "Skill Locations")
+                        .text(MENU_OPEN_SETTINGS, "Settings")
+                        .separator()
+                        .close_window()
+                        .build()?,
+                )
+                .build()?;
+
+            app.set_menu(menu)?;
+            Ok(())
+        })
+        .on_menu_event(|app, event| {
+            let command = match event.id().0.as_str() {
+                MENU_OPEN_ROOTS => Some(MENU_OPEN_ROOTS),
+                MENU_OPEN_SETTINGS => Some(MENU_OPEN_SETTINGS),
+                MENU_REFRESH => Some(MENU_REFRESH),
+                MENU_SYNC_SELECTED => Some(MENU_SYNC_SELECTED),
+                _ => None,
+            };
+
+            if let Some(command) = command {
+                let _ = app.emit(MENU_EVENT_NAME, command);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             github_status,
             github_list_owners,
@@ -1252,6 +1454,14 @@ mod tests {
     }
 
     #[test]
+    fn workspace_path_is_shared_across_https_and_ssh_urls() {
+        let home = PathBuf::from("/tmp/skillsync-home");
+        let https = workspace_path_for_home(&home, "https://github.com/acme/skills");
+        let ssh = workspace_path_for_home(&home, "git@github.com:acme/skills.git");
+        assert_eq!(https, ssh);
+    }
+
+    #[test]
     fn parse_repo_url_accepts_https_and_ssh_forms() {
         let https = parse_repo_url("https://github.com/acme/skills.git").unwrap();
         let ssh = parse_repo_url("git@github.com:acme/skills.git").unwrap();
@@ -1263,6 +1473,18 @@ mod tests {
     #[test]
     fn parse_repo_url_rejects_non_github_hosts() {
         assert!(parse_repo_url("https://gitlab.com/acme/skills").is_err());
+    }
+
+    #[test]
+    fn git_candidate_urls_include_ssh_fallback_for_https_input() {
+        let candidates = git_candidate_urls("https://github.com/acme/skills");
+        assert_eq!(candidates[0], "https://github.com/acme/skills");
+        assert!(candidates.contains(&"git@github.com:acme/skills.git".to_string()));
+    }
+
+    #[test]
+    fn fallback_binary_locations_include_homebrew_gh() {
+        assert!(fallback_binary_locations("gh").contains(&"/opt/homebrew/bin/gh"));
     }
 
     #[test]

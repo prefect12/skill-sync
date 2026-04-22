@@ -1,17 +1,21 @@
 import { useEffect, useState, useTransition } from "react";
 import { fallbackLocalSnapshots, fallbackRoots } from "../lib/fallback";
 import { getMessages } from "../lib/i18n";
+import { MENU_COMMAND_EVENT, type MenuCommand } from "../lib/menu";
 import {
   DEFAULT_INSTALL_ROOTS,
+  mergeRootConfigs,
   readDefaultInstallRoots,
   readPreferences,
+  readBuiltInRootOverrides,
   readRootConfigs,
   sanitizeId,
-  uniqueRoots,
+  writeBuiltInRootOverrides,
   writeDefaultInstallRoots,
   writeRootConfigs
 } from "../lib/persistence";
 import { discoverRoots, PREVIEW_RUNTIME_ERROR, scanLocalRoots } from "../lib/tauri";
+import { isTauriRuntime } from "../lib/windowing";
 import type {
   DefaultInstallRoots,
   LocalRootSnapshot,
@@ -36,10 +40,10 @@ export function useRootsState() {
 
   async function loadRoots(overrideRoots?: SkillRootConfig[]) {
     const customRoots = readRootConfigs();
+    const builtInOverrides = readBuiltInRootOverrides();
     let discovered = fallbackRoots();
-    let local = fallbackLocalSnapshots(
-      overrideRoots ?? uniqueRoots([...fallbackRoots().roots, ...customRoots])
-    );
+    let mergedRoots = overrideRoots ?? mergeRootConfigs(fallbackRoots().roots, customRoots, builtInOverrides);
+    let local = fallbackLocalSnapshots(mergedRoots);
     const nextNotes: string[] = [];
 
     try {
@@ -51,11 +55,7 @@ export function useRootsState() {
       }
     }
 
-    const mergedRoots = uniqueRoots([
-      ...(overrideRoots ?? []),
-      ...discovered.roots,
-      ...customRoots
-    ]);
+    mergedRoots = overrideRoots ?? mergeRootConfigs(discovered.roots, customRoots, builtInOverrides);
     setRootConfigs(mergedRoots);
 
     try {
@@ -82,11 +82,39 @@ export function useRootsState() {
     };
 
     window.addEventListener("storage", syncFromStorage);
-    window.addEventListener("focus", syncFromStorage);
 
     return () => {
       window.removeEventListener("storage", syncFromStorage);
-      window.removeEventListener("focus", syncFromStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const unsubscribe = await listen<MenuCommand>(MENU_COMMAND_EVENT, (event) => {
+        if (event.payload === "refresh") {
+          refresh();
+        }
+      });
+
+      if (disposed) {
+        unsubscribe();
+        return;
+      }
+
+      unlisten = unsubscribe;
+    })();
+
+    return () => {
+      disposed = true;
+      unlisten?.();
     };
   }, []);
 
@@ -102,11 +130,27 @@ export function useRootsState() {
   }, [rootConfigs, selectedRootId]);
 
   function updateRootConfig(rootId: string, patch: Partial<SkillRootConfig>) {
-    const nextRoots = rootConfigs.map((root) =>
-      root.id === rootId ? { ...root, ...patch } : root
-    );
+    const targetRoot = rootConfigs.find((root) => root.id === rootId);
+    if (!targetRoot) {
+      return;
+    }
+
+    const nextRoots = rootConfigs.map((root) => (root.id === rootId ? { ...root, ...patch } : root));
     setRootConfigs(nextRoots);
-    writeRootConfigs(nextRoots);
+
+    if (targetRoot.kind === "custom") {
+      writeRootConfigs(nextRoots.filter((root) => root.kind === "custom"));
+      return;
+    }
+
+    const overrides = {
+      ...readBuiltInRootOverrides(),
+      [rootId]: {
+        ...readBuiltInRootOverrides()[rootId],
+        ...patch
+      }
+    };
+    writeBuiltInRootOverrides(overrides);
   }
 
   function addCustomRoot(input: {
@@ -126,17 +170,31 @@ export function useRootsState() {
       enabled: true
     };
 
-    const nextRoots = uniqueRoots([...rootConfigs, root]);
+    const nextRoots = mergeRootConfigs([], [...readRootConfigs(), root], readBuiltInRootOverrides());
     setRootConfigs(nextRoots);
-    writeRootConfigs(nextRoots);
+    writeRootConfigs(nextRoots.filter((item) => item.kind === "custom"));
     setSelectedRootId(root.id);
     void loadRoots(nextRoots);
   }
 
   function removeRoot(rootId: string) {
+    const removedRoot = rootConfigs.find((root) => root.id === rootId);
     const nextRoots = rootConfigs.filter((root) => root.id !== rootId);
     setRootConfigs(nextRoots);
-    writeRootConfigs(nextRoots);
+    writeRootConfigs(nextRoots.filter((root) => root.kind === "custom"));
+
+    if (
+      removedRoot &&
+      defaultInstallRoots[removedRoot.providerHint] === removedRoot.id
+    ) {
+      const nextDefaults = {
+        ...defaultInstallRoots,
+        [removedRoot.providerHint]: DEFAULT_INSTALL_ROOTS[removedRoot.providerHint]
+      };
+      setDefaultInstallRoots(nextDefaults);
+      writeDefaultInstallRoots(nextDefaults);
+    }
+
     setSelectedRootId(nextRoots[0]?.id ?? "");
     void loadRoots(nextRoots);
   }
