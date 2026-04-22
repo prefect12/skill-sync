@@ -78,11 +78,23 @@ type Messages = {
   rootSkillCount: (count: number) => string;
   defaultInstallRoot: string;
   remoteRepoSubpath: string;
+  remoteRepoSubpathHelp: string;
   removeRoot: string;
   addRootTitle: string;
+  addRootSubtitle: string;
   addRoot: string;
   label: string;
+  labelHelp: string;
   providerHint: string;
+  providerHintHelp: string;
+  providerCodex: string;
+  providerCodexDescription: string;
+  providerClaude: string;
+  providerClaudeDescription: string;
+  providerGeneric: string;
+  providerGenericDescription: string;
+  localPathHelp: string;
+  setAsDefaultHelp: string;
   setAsDefault: string;
   clearDefault: string;
   settingsTitle: string;
@@ -142,7 +154,7 @@ const messages: Record<Language, Messages> = {
     githubResolvedRepoLabel: "Resolved repository URL",
     githubPermissionLabel: "Permission",
     githubPermissionUnknown: "Permission unavailable",
-    openRoots: "Skill Locations",
+    openRoots: "Skill Folders",
     openSettings: "Settings",
     refresh: "Refresh",
     refreshing: "Refreshing…",
@@ -185,8 +197,9 @@ const messages: Record<Language, Messages> = {
     syncDisabledReadOnlyNote: "This repository is read-only for the current GitHub account. Refresh and choose a repo with write access before syncing.",
     recentActivity: "Recent activity",
     activityEmpty: "No activity yet.",
-    rootsWindowTitle: "Skill Locations",
-    rootsWindowSubtitle: "Manage the local folders that SkillSync scans and writes.",
+    rootsWindowTitle: "Skill Folders",
+    rootsWindowSubtitle:
+      "Choose which local folders SkillSync should treat as skill libraries.",
     rootsRefresh: "Refresh",
     rootsLoading: "Refreshing…",
     rootsEmpty: "No locations available.",
@@ -197,12 +210,32 @@ const messages: Record<Language, Messages> = {
     rootMissing: "Missing on this Mac",
     rootSkillCount: (count) => `${count} skills`,
     defaultInstallRoot: "Default install location",
-    remoteRepoSubpath: "Remote repo subpath",
+    remoteRepoSubpath: "Folder inside sync repo",
+    remoteRepoSubpathHelp:
+      "Where this folder is stored inside the connected GitHub repository, for example roots/codex-home.",
     removeRoot: "Remove location",
-    addRootTitle: "Add custom location",
+    addRootTitle: "Add another skill folder",
+    addRootSubtitle:
+      "Use this for custom folders outside the built-in Codex or Claude locations.",
     addRoot: "Add location",
-    label: "Label",
-    providerHint: "Provider",
+    label: "Display name",
+    labelHelp: "A friendly name shown in the app.",
+    providerHint: "Used by",
+    providerHintHelp:
+      "Choose which assistant this folder belongs to. This also decides the default destination when syncing remote-only skills.",
+    providerCodex: "Codex",
+    providerCodexDescription:
+      "For ~/.codex/skills or other folders used only by Codex.",
+    providerClaude: "Claude",
+    providerClaudeDescription:
+      "For Claude Desktop or Claude Code skill folders.",
+    providerGeneric: "Shared / Other",
+    providerGenericDescription:
+      "For team folders or any skill library not tied to one assistant.",
+    localPathHelp:
+      "SkillSync scans this local folder on your Mac. Each subfolder containing SKILL.md is treated as one skill.",
+    setAsDefaultHelp:
+      "When a remote-only skill needs a destination for this assistant, use this folder.",
     setAsDefault: "Set as default for provider",
     clearDefault: "Clear default",
     settingsTitle: "Settings",
@@ -261,7 +294,7 @@ const messages: Record<Language, Messages> = {
     githubResolvedRepoLabel: "当前仓库地址",
     githubPermissionLabel: "权限",
     githubPermissionUnknown: "无法判断权限",
-    openRoots: "Skill 目录",
+    openRoots: "Skill 文件夹",
     openSettings: "设置",
     refresh: "刷新",
     refreshing: "刷新中…",
@@ -301,8 +334,8 @@ const messages: Record<Language, Messages> = {
     syncDisabledReadOnlyNote: "当前 GitHub 账号对这个仓库只有只读权限。请刷新并选择有写权限的仓库后再同步。",
     recentActivity: "最近活动",
     activityEmpty: "暂时还没有活动记录。",
-    rootsWindowTitle: "Skill 目录",
-    rootsWindowSubtitle: "管理 SkillSync 要扫描和写入的本地目录。",
+    rootsWindowTitle: "Skill 文件夹",
+    rootsWindowSubtitle: "选择哪些本地文件夹要被 SkillSync 当成 Skill 库来管理。",
     rootsRefresh: "刷新",
     rootsLoading: "刷新中…",
     rootsEmpty: "暂时没有可用目录。",
@@ -313,12 +346,28 @@ const messages: Record<Language, Messages> = {
     rootMissing: "这台 Mac 上缺失",
     rootSkillCount: (count) => `${count} 个 skills`,
     defaultInstallRoot: "默认安装目录",
-    remoteRepoSubpath: "远端仓库子路径",
+    remoteRepoSubpath: "同步仓库中的目录",
+    remoteRepoSubpathHelp:
+      "这个本地文件夹在 GitHub 同步仓库里对应的目录，例如 roots/codex-home。",
     removeRoot: "删除目录",
-    addRootTitle: "添加自定义目录",
+    addRootTitle: "添加另一个 Skill 文件夹",
+    addRootSubtitle: "如果你的 Skill 不在内置的 Codex / Claude 目录里，就在这里补充。",
     addRoot: "添加目录",
-    label: "名称",
-    providerHint: "Provider",
+    label: "显示名称",
+    labelHelp: "这是应用里展示给你看的名字。",
+    providerHint: "这个目录给谁用",
+    providerHintHelp:
+      "告诉 SkillSync 这个目录主要是给哪个助手用的。拉取远端新 skill 时，也会用它来决定默认落到哪个目录。",
+    providerCodex: "Codex",
+    providerCodexDescription: "用于 ~/.codex/skills 或其他只给 Codex 用的目录。",
+    providerClaude: "Claude",
+    providerClaudeDescription: "用于 Claude Desktop / Claude Code 的 skill 目录。",
+    providerGeneric: "通用 / 共享",
+    providerGenericDescription: "用于团队共享目录，或不绑定某一个助手的 skill 库。",
+    localPathHelp:
+      "SkillSync 会扫描这台 Mac 上的这个本地文件夹。每个包含 SKILL.md 的子目录都会被当成一个 skill。",
+    setAsDefaultHelp:
+      "如果某个远端 skill 只存在于仓库里、需要下载到本地，就默认放到这个目录。",
     setAsDefault: "设为该 provider 的默认目录",
     clearDefault: "清除默认",
     settingsTitle: "设置",

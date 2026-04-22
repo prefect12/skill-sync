@@ -1,0 +1,98 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 280 280"
+  role="img"
+  aria-labelledby="skillsyncLogoTitle skillsyncLogoDesc"
+>
+  <title id="skillsyncLogoTitle">SkillSync Mac logo</title>
+  <desc id="skillsyncLogoDesc">
+    A smiling cloud above the word skill, connected by dotted arcs to two laptops.
+  </desc>
+  <defs>
+    <filter id="card-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#18355f" flood-opacity="0.12" />
+    </filter>
+    <linearGradient id="screen-glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#eef7ff" />
+      <stop offset="100%" stop-color="#ffffff" />
+    </linearGradient>
+    <linearGradient id="laptop-body" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c5d1df" />
+      <stop offset="100%" stop-color="#93a5ba" />
+    </linearGradient>
+  </defs>
+
+  <rect
+    x="10"
+    y="10"
+    width="260"
+    height="260"
+    rx="40"
+    fill="#fffdf9"
+    stroke="#dadde5"
+    stroke-width="2"
+    filter="url(#card-shadow)"
+  />
+
+  <g stroke="#184a90" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M111 96c-17 0-30-13-30-30 0-14 10-26 24-29 5-21 24-36 46-36 22 0 41 14 47 34 3-1 6-1 9-1 18 0 33 15 33 33s-15 33-33 33H111Z" transform="translate(-12 28)" />
+    <path d="M97 152C61 166 40 191 39 222" stroke-dasharray="7 14" />
+    <path d="M183 152c36 14 57 39 58 70" stroke-dasharray="7 14" />
+    <path d="M64 55l6 7" />
+    <path d="M56 70l-9 2" />
+    <path d="M72 74l-1 10" />
+    <path d="M216 55l-6 7" />
+    <path d="M224 70l9 2" />
+    <path d="M208 74l1 10" />
+  </g>
+
+  <g fill="#184a90">
+    <circle cx="124" cy="108" r="4.5" />
+    <circle cx="156" cy="108" r="4.5" />
+  </g>
+
+  <g fill="#f7ccd5" opacity="0.9">
+    <circle cx="111" cy="120" r="6.5" />
+    <circle cx="169" cy="120" r="6.5" />
+  </g>
+
+  <path
+    d="M128 121c4 6 10 9 16 9s12-3 16-9"
+    fill="none"
+    stroke="#184a90"
+    stroke-width="5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <text
+    x="140"
+    y="177"
+    text-anchor="middle"
+    font-size="46"
+    font-weight="700"
+    letter-spacing="0.02em"
+    font-family="'SF Pro Rounded','Arial Rounded MT Bold','Trebuchet MS',sans-serif"
+    fill="#193f77"
+  >
+    skill
+  </text>
+
+  <g transform="rotate(-6 66 218)">
+    <rect x="36" y="191" width="60" height="42" rx="7" fill="url(#screen-glow)" stroke="#193f77" stroke-width="4" />
+    <rect x="44" y="198" width="44" height="26" rx="4" fill="#f7fbff" />
+    <path d="M52 217l12-13 10 9 6-2-3 7-25 2Z" fill="#74b8ff" opacity="0.9" />
+    <path d="M34 235h64l12 12H48Z" fill="url(#laptop-body)" stroke="#193f77" stroke-width="4" />
+    <path d="M56 239h30" stroke="#647d98" stroke-width="4" stroke-linecap="round" />
+    <path d="M70 241l7 3" stroke="#193f77" stroke-width="4" stroke-linecap="round" />
+  </g>
+
+  <g transform="rotate(6 214 218)">
+    <rect x="184" y="191" width="60" height="42" rx="7" fill="url(#screen-glow)" stroke="#193f77" stroke-width="4" />
+    <rect x="192" y="198" width="44" height="26" rx="4" fill="#f8fbff" />
+    <path d="M201 211l9 9 16-18" fill="none" stroke="#a4a7ae" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M182 235h64l12 12h-62Z" fill="url(#laptop-body)" stroke="#193f77" stroke-width="4" />
+    <path d="M204 239h30" stroke="#647d98" stroke-width="4" stroke-linecap="round" />
+    <path d="M218 241l7 3" stroke="#193f77" stroke-width="4" stroke-linecap="round" />
+  </g>
+</svg>

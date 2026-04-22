@@ -56,29 +56,37 @@ export async function openAppWindow(view: Exclude<WindowView, "main">) {
     return;
   }
 
-  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-  const existing = await WebviewWindow.getByLabel(descriptor.label);
-  if (existing) {
-    await existing.show();
-    await existing.setFocus();
-    return;
+  try {
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+    const existing = await WebviewWindow.getByLabel(descriptor.label);
+    if (existing) {
+      await existing.show();
+      await existing.setFocus();
+      return;
+    }
+
+    const created = new WebviewWindow(descriptor.label, {
+      title: descriptor.title,
+      url: targetUrl.toString(),
+      center: true,
+      width: descriptor.width,
+      height: descriptor.height,
+      minWidth: descriptor.minWidth,
+      minHeight: descriptor.minHeight,
+      resizable: true,
+      visible: true
+    });
+
+    created.once("tauri://created", async () => {
+      await created.setFocus();
+    });
+
+    created.once("tauri://error", (error) => {
+      console.error(`Failed to create ${view} window`, error);
+    });
+  } catch (error) {
+    console.error(`Failed to open ${view} window`, error);
   }
-
-  const created = new WebviewWindow(descriptor.label, {
-    title: descriptor.title,
-    url: targetUrl.toString(),
-    center: true,
-    width: descriptor.width,
-    height: descriptor.height,
-    minWidth: descriptor.minWidth,
-    minHeight: descriptor.minHeight,
-    resizable: true,
-    visible: true
-  });
-
-  created.once("tauri://created", async () => {
-    await created.setFocus();
-  });
 }
 
 export async function closeCurrentAppWindow() {
