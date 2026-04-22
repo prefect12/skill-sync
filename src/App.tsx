@@ -1,9 +1,14 @@
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { MainSyncWindow } from "./components/MainSyncWindow";
 import { RootsWindow } from "./components/RootsWindow";
 import { MENU_COMMAND_EVENT, type MenuCommand } from "./lib/menu";
 import { SettingsWindow } from "./components/SettingsWindow";
-import { getWindowView, isTauriRuntime, openAppWindow } from "./lib/windowing";
+import {
+  getWindowView,
+  isTauriRuntime,
+  openAppWindow,
+  revealCurrentAppWindow
+} from "./lib/windowing";
 import { usePreferencesState } from "./state/usePreferencesState";
 
 function resolveTheme(appearance: "system" | "light" | "dark") {
@@ -17,6 +22,10 @@ export default function App() {
   const { preferences, updateAppearance, updateLanguage, setShowTechnicalActivity } =
     usePreferencesState();
   const view = getWindowView();
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = resolveTheme(preferences.appearance);
+  }, [preferences.appearance]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -33,6 +42,8 @@ export default function App() {
   }, [preferences.appearance]);
 
   useEffect(() => {
+    void revealCurrentAppWindow();
+
     if (!isTauriRuntime()) {
       return;
     }

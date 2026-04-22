@@ -6,6 +6,43 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0"
     />
+    <script>
+      (() => {
+        const key = "skill-sync/preferences";
+        const fallbackTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
+
+        let theme = fallbackTheme;
+
+        try {
+          const raw = window.localStorage.getItem(key);
+          if (raw) {
+            const preferences = JSON.parse(raw);
+            if (preferences?.appearance === "light" || preferences?.appearance === "dark") {
+              theme = preferences.appearance;
+            }
+          }
+        } catch {
+          theme = fallbackTheme;
+        }
+
+        const background = theme === "dark" ? "#111318" : "#f4f5f7";
+        const foreground = theme === "dark" ? "#f5f7fb" : "#17212f";
+
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.backgroundColor = background;
+
+        const style = document.createElement("style");
+        style.textContent =
+          "html,body,#root{min-height:100%;background:" +
+          background +
+          ";color:" +
+          foreground +
+          ";}body{margin:0;}";
+        document.head.appendChild(style);
+      })();
+    </script>
     <link rel="icon" type="image/png" href="/skillsync-logo.png" />
     <title>SkillSync Mac</title>
   </head>
