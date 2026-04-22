@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { buildRootGroups, needsReview } from "./status";
-import type { LocalRootSnapshot, RemoteRootSnapshot, SkillRootConfig } from "./types";
+import {
+  buildRootGroups,
+  needsReview,
+  reconcileKnownSyncedEntries
+} from "./status";
+import type {
+  KnownSyncedEntries,
+  LocalRootSnapshot,
+  RemoteRootSnapshot,
+  SkillRootConfig
+} from "./types";
 
 const ROOT: SkillRootConfig = {
   id: "codex-home",
@@ -92,7 +101,7 @@ describe("status helpers", () => {
           }
         ])
       ],
-      new Set(["codex-home:delta"])
+      { "codex-home:delta": true }
     );
 
     const rows = Object.fromEntries(groups[0].rows.map((row) => [row.name, row]));
@@ -106,5 +115,78 @@ describe("status helpers", () => {
     expect(needsReview({ state: "conflict" } as never)).toBe(true);
     expect(needsReview({ state: "pending-delete" } as never)).toBe(true);
     expect(needsReview({ state: "local-changed" } as never)).toBe(false);
+  });
+
+  it("expires pending-delete tombstones when recreated content no longer matches", () => {
+    const groups = buildRootGroups(
+      [ROOT],
+      [
+        localSnapshot([
+          {
+            id: "codex-home:alpha",
+            rootId: ROOT.id,
+            name: "alpha",
+            path: "/tmp/alpha",
+            modifiedAtMs: 50,
+            contentHash: "recreated-local",
+            isSymlink: false
+          }
+        ])
+      ],
+      [remoteSnapshot([])],
+      { "codex-home:alpha": "old-synced-hash" }
+    );
+
+    expect(groups[0].rows[0].state).toBe("only-local");
+  });
+
+  it("stores the latest synced hash for in-sync and pending-delete rows", () => {
+    const rows = buildRootGroups(
+      [ROOT],
+      [
+        localSnapshot([
+          {
+            id: "codex-home:alpha",
+            rootId: ROOT.id,
+            name: "alpha",
+            path: "/tmp/alpha",
+            modifiedAtMs: 20,
+            contentHash: "same",
+            isSymlink: false
+          },
+          {
+            id: "codex-home:beta",
+            rootId: ROOT.id,
+            name: "beta",
+            path: "/tmp/beta",
+            modifiedAtMs: 30,
+            contentHash: "local-only",
+            isSymlink: false
+          }
+        ])
+      ],
+      [
+        remoteSnapshot([
+          {
+            id: "codex-home:alpha",
+            rootId: ROOT.id,
+            name: "alpha",
+            repoPath: "roots/codex-home/alpha",
+            modifiedAtMs: 20,
+            contentHash: "same"
+          }
+        ])
+      ],
+      { "codex-home:beta": "local-only" }
+    )[0].rows;
+
+    const current: KnownSyncedEntries = {
+      "codex-home:legacy": true
+    };
+
+    expect(reconcileKnownSyncedEntries(current, rows, ["codex-home:alpha"])).toEqual({
+      "codex-home:alpha": "same",
+      "codex-home:legacy": true
+    });
   });
 });

@@ -30,6 +30,10 @@ export interface SkillRootConfig {
 }
 
 export type DefaultInstallRoots = Record<ProviderHint, string>;
+export type BuiltInRootOverride = Partial<
+  Pick<SkillRootConfig, "label" | "providerHint" | "localPath" | "remotePath" | "enabled">
+>;
+export type KnownSyncedEntries = Record<string, string | true>;
 
 export interface AppPreferences {
   language: Language;
