@@ -192,6 +192,12 @@ enum CommandError {
     Failed(String),
 }
 
+const GITHUB_HOST: &str = "github.com";
+const GH_ENV: [(&str, &str); 2] = [
+    ("GH_HOST", GITHUB_HOST),
+    ("GH_PROMPT_DISABLED", "1"),
+];
+
 impl CommandError {
     fn into_message(self) -> String {
         match self {
@@ -502,12 +508,20 @@ fn skill_sync_workspace(repo_url: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn run_command(binary: &str, repo_dir: Option<&Path>, args: &[&str]) -> Result<CommandResponse, CommandError> {
+fn run_command_with_env(
+    binary: &str,
+    repo_dir: Option<&Path>,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<CommandResponse, CommandError> {
     let mut command = Command::new(binary);
     if let Some(repo_dir) = repo_dir {
         command.arg("-C").arg(repo_dir);
     }
     command.args(args);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
 
     let output = command
         .output()
@@ -523,8 +537,14 @@ fn run_command(binary: &str, repo_dir: Option<&Path>, args: &[&str]) -> Result<C
     })
 }
 
-fn run_command_checked(binary: &str, repo_dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
-    let response = run_command(binary, repo_dir, args).map_err(CommandError::into_message)?;
+fn run_command_checked_with_env(
+    binary: &str,
+    repo_dir: Option<&Path>,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<String, String> {
+    let response = run_command_with_env(binary, repo_dir, args, envs)
+        .map_err(CommandError::into_message)?;
 
     if !response.success {
         return Err(if response.stderr.is_empty() {
@@ -537,12 +557,75 @@ fn run_command_checked(binary: &str, repo_dir: Option<&Path>, args: &[&str]) -> 
     Ok(response.stdout)
 }
 
+fn run_command_checked(binary: &str, repo_dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
+    run_command_checked_with_env(binary, repo_dir, args, &[])
+}
+
 fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
     run_command_checked("git", repo_dir, args)
 }
 
 fn run_gh(args: &[&str]) -> Result<String, String> {
-    run_command_checked("gh", None, args)
+    run_command_checked_with_env("gh", None, args, &GH_ENV)
+}
+
+fn run_gh_auth_status() -> Result<CommandResponse, CommandError> {
+    run_command_with_env(
+        "gh",
+        None,
+        &["auth", "status", "--active", "--hostname", GITHUB_HOST],
+        &GH_ENV,
+    )
+}
+
+fn github_status_from_auth_response(
+    auth_response: Result<CommandResponse, CommandError>,
+    username: Option<Result<String, String>>,
+) -> GitHubStatusPayload {
+    match auth_response {
+        Ok(response) if response.success => match username {
+            Some(Ok(username)) => GitHubStatusPayload {
+                cli_available: true,
+                authenticated: true,
+                username: Some(username.trim().to_string()),
+                note: None,
+            },
+            Some(Err(error)) => GitHubStatusPayload {
+                cli_available: true,
+                authenticated: false,
+                username: None,
+                note: Some(error),
+            },
+            None => GitHubStatusPayload {
+                cli_available: true,
+                authenticated: false,
+                username: None,
+                note: Some("GitHub CLI did not return a username.".into()),
+            },
+        },
+        Ok(response) => GitHubStatusPayload {
+            cli_available: true,
+            authenticated: false,
+            username: None,
+            note: Some(if response.stderr.is_empty() {
+                "GitHub CLI is installed but not authenticated.".into()
+            } else {
+                response.stderr
+            }),
+        },
+        Err(CommandError::NotFound(message)) => GitHubStatusPayload {
+            cli_available: false,
+            authenticated: false,
+            username: None,
+            note: Some(message),
+        },
+        Err(CommandError::Failed(message)) => GitHubStatusPayload {
+            cli_available: true,
+            authenticated: false,
+            username: None,
+            note: Some(message),
+        },
+    }
 }
 
 fn ensure_repo_clone(repo_url: &str) -> Result<PathBuf, String> {
@@ -778,51 +861,15 @@ fn write_manifest(repo_dir: &Path, roots: &[SkillRootConfig]) -> Result<(), Stri
 
 #[tauri::command]
 fn github_status() -> Result<GitHubStatusPayload, String> {
-    match run_command("gh", None, &["auth", "status"]) {
-        Ok(response)
-            if response.success
-                && !response.stderr.to_lowercase().contains("failed to log in")
-                && !response.stderr.to_lowercase().contains("invalid") =>
-        {
-            let username = run_gh(&["api", "user", "-q", ".login"]);
-            match username {
-                Ok(username) => Ok(GitHubStatusPayload {
-                    cli_available: true,
-                    authenticated: true,
-                    username: Some(username.trim().to_string()),
-                    note: None,
-                }),
-                Err(error) => Ok(GitHubStatusPayload {
-                    cli_available: true,
-                    authenticated: false,
-                    username: None,
-                    note: Some(error),
-                }),
-            }
+    let auth_response = run_gh_auth_status();
+    let username = match &auth_response {
+        Ok(response) if response.success => {
+            Some(run_gh(&["api", "--hostname", GITHUB_HOST, "user", "-q", ".login"]))
         }
-        Ok(response) => Ok(GitHubStatusPayload {
-            cli_available: true,
-            authenticated: false,
-            username: None,
-            note: Some(if response.stderr.is_empty() {
-                "GitHub CLI is installed but not authenticated.".into()
-            } else {
-                response.stderr
-            }),
-        }),
-        Err(CommandError::NotFound(message)) => Ok(GitHubStatusPayload {
-            cli_available: false,
-            authenticated: false,
-            username: None,
-            note: Some(message),
-        }),
-        Err(CommandError::Failed(message)) => Ok(GitHubStatusPayload {
-            cli_available: true,
-            authenticated: false,
-            username: None,
-            note: Some(message),
-        }),
-    }
+        _ => None,
+    };
+
+    Ok(github_status_from_auth_response(auth_response, username))
 }
 
 #[tauri::command]
@@ -837,7 +884,8 @@ fn github_list_owners() -> Result<Vec<GitHubOwner>, String> {
     let username = status
         .username
         .ok_or_else(|| "GitHub CLI did not return a username.".to_string())?;
-    let org_output = run_gh(&["api", "user/orgs", "-q", ".[].login"]).unwrap_or_default();
+    let org_output = run_gh(&["api", "--hostname", GITHUB_HOST, "user/orgs", "-q", ".[].login"])
+        .unwrap_or_default();
     Ok(parse_owner_lines(&username, &org_output))
 }
 
@@ -874,8 +922,8 @@ fn github_validate_repository(input: GitHubValidationInput) -> Result<GitHubRepo
         return Err("Provide either a GitHub repository full name or URL.".into());
     };
 
-    match run_command("gh", None, &["auth", "status"]) {
-        Ok(response) if response.success => {
+    match github_status()? {
+        GitHubStatusPayload { authenticated: true, .. } => {
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
             struct GitHubRepoViewEntry {
@@ -1186,5 +1234,50 @@ mod tests {
 
         assert_eq!(repositories[0].owner, "prefect12");
         assert_eq!(repositories[0].viewer_permission.as_deref(), Some("ADMIN"));
+    }
+
+    #[test]
+    fn github_status_uses_scoped_auth_success() {
+        let status = github_status_from_auth_response(
+            Ok(CommandResponse {
+                success: true,
+                stdout: String::new(),
+                stderr: "Logged in to github.com account prefect12".into(),
+            }),
+            Some(Ok("prefect12".into())),
+        );
+
+        assert!(status.cli_available);
+        assert!(status.authenticated);
+        assert_eq!(status.username.as_deref(), Some("prefect12"));
+        assert!(status.note.is_none());
+    }
+
+    #[test]
+    fn github_status_preserves_failed_auth_message() {
+        let status = github_status_from_auth_response(
+            Ok(CommandResponse {
+                success: false,
+                stdout: String::new(),
+                stderr: "token for github.com is expired".into(),
+            }),
+            None,
+        );
+
+        assert!(status.cli_available);
+        assert!(!status.authenticated);
+        assert_eq!(status.note.as_deref(), Some("token for github.com is expired"));
+    }
+
+    #[test]
+    fn github_status_marks_missing_cli_as_unavailable() {
+        let status = github_status_from_auth_response(
+            Err(CommandError::NotFound("gh is not installed".into())),
+            None,
+        );
+
+        assert!(!status.cli_available);
+        assert!(!status.authenticated);
+        assert_eq!(status.note.as_deref(), Some("gh is not installed"));
     }
 }
