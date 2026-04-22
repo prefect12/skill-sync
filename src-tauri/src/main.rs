@@ -431,7 +431,73 @@ fn hash_directory(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn skill_entry_from_dir(root_id: &str, entry_path: &Path) -> Option<LocalSkillEntry> {
+fn relative_skill_name(root_path: &Path, skill_path: &Path) -> Option<String> {
+    let relative = skill_path
+        .strip_prefix(root_path)
+        .ok()?
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    if relative.is_empty() {
+        None
+    } else {
+        Some(relative)
+    }
+}
+
+fn collect_skill_dirs(root_path: &Path) -> Result<Vec<PathBuf>, String> {
+    fn walk(root_path: &Path, current: &Path, skills: &mut Vec<PathBuf>) -> Result<(), String> {
+        let entries = fs::read_dir(current)
+            .map_err(|error| format!("Failed to read {}: {error}", current.display()))?;
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+
+            if !metadata.is_dir() && !metadata.file_type().is_symlink() {
+                continue;
+            }
+
+            let scan_path = if metadata.file_type().is_symlink() {
+                match fs::canonicalize(&path) {
+                    Ok(resolved) => resolved,
+                    Err(_) => continue,
+                }
+            } else {
+                path.clone()
+            };
+
+            if !scan_path.is_dir() {
+                continue;
+            }
+
+            if scan_path.join("SKILL.md").exists() {
+                skills.push(path);
+                continue;
+            }
+
+            if path != root_path {
+                walk(root_path, &path, skills)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    let mut skills = vec![];
+    walk(root_path, root_path, &mut skills)?;
+    skills.sort();
+    Ok(skills)
+}
+
+fn skill_entry_from_dir(root_id: &str, root_path: &Path, entry_path: &Path) -> Option<LocalSkillEntry> {
     let metadata = fs::symlink_metadata(entry_path).ok()?;
     let is_symlink = metadata.file_type().is_symlink();
     let target_path = if is_symlink {
@@ -445,7 +511,7 @@ fn skill_entry_from_dir(root_id: &str, entry_path: &Path) -> Option<LocalSkillEn
         return None;
     }
 
-    let name = entry_path.file_name()?.to_string_lossy().to_string();
+    let name = relative_skill_name(root_path, entry_path)?;
     let modified_at_ms = latest_modified_ms(&target_path);
     let content_hash = hash_directory(&target_path).ok()?;
 
@@ -472,21 +538,8 @@ fn scan_root(config: &SkillRootConfig) -> Result<LocalRootSnapshot, String> {
     }
 
     let mut skills = vec![];
-    let entries = fs::read_dir(&root_path)
-        .map_err(|error| format!("Failed to read {}: {error}", root_path.display()))?;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let symlink_metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(_) => continue,
-        };
-
-        if !symlink_metadata.is_dir() && !symlink_metadata.file_type().is_symlink() {
-            continue;
-        }
-
-        if let Some(skill) = skill_entry_from_dir(&config.id, &path) {
+    for path in collect_skill_dirs(&root_path)? {
+        if let Some(skill) = skill_entry_from_dir(&config.id, &root_path, &path) {
             skills.push(skill);
         }
     }
@@ -697,23 +750,10 @@ fn scan_remote_root(repo_dir: &Path, config: &SkillRootConfig) -> Result<RemoteR
     }
 
     let mut skills = vec![];
-    let entries = fs::read_dir(&root_path)
-        .map_err(|error| format!("Failed to read remote root {}: {error}", root_path.display()))?;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let skill_file = path.join("SKILL.md");
-        if !skill_file.exists() {
-            continue;
-        }
-
-        let Some(name) = path.file_name().map(|value| value.to_string_lossy().to_string()) else {
+    for path in collect_skill_dirs(&root_path)? {
+        let Some(name) = relative_skill_name(&root_path, &path) else {
             continue;
         };
-
         skills.push(remote_skill_entry(
             repo_dir,
             &config.id,
@@ -1174,6 +1214,20 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn create_test_dir(prefix: &str) -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let suffix = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "skillsync-{prefix}-{}-{suffix}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
 
     #[test]
     fn normalize_remote_path_rejects_traversal() {
@@ -1279,5 +1333,52 @@ mod tests {
         assert!(!status.cli_available);
         assert!(!status.authenticated);
         assert_eq!(status.note.as_deref(), Some("gh is not installed"));
+    }
+
+    #[test]
+    fn collect_skill_dirs_finds_nested_skills() {
+        let root = create_test_dir("nested-scan");
+        let nested = root.join(".system/openai-docs");
+        let direct = root.join("equity-investment-dossier");
+
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(&direct).unwrap();
+        fs::write(nested.join("SKILL.md"), "# nested").unwrap();
+        fs::write(direct.join("SKILL.md"), "# direct").unwrap();
+
+        let skills = collect_skill_dirs(&root).unwrap();
+        let names = skills
+            .iter()
+            .filter_map(|path| relative_skill_name(&root, path))
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec![".system/openai-docs", "equity-investment-dossier"]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scan_root_uses_relative_paths_for_nested_skills() {
+        let root = create_test_dir("scan-root");
+        let nested = root.join("codex-primary-runtime/spreadsheets");
+
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("SKILL.md"), "# sheets").unwrap();
+
+        let snapshot = scan_root(&SkillRootConfig {
+            id: "codex-home".into(),
+            label: "Codex Home".into(),
+            kind: "codex-home".into(),
+            provider_hint: "codex".into(),
+            local_path: root.to_string_lossy().to_string(),
+            remote_path: "roots/codex-home".into(),
+            enabled: true,
+        })
+        .unwrap();
+
+        assert_eq!(snapshot.skills.len(), 1);
+        assert_eq!(snapshot.skills[0].name, "codex-primary-runtime/spreadsheets");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
