@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SkillSync Mac",
+  "productName": "SkillSync",
   "version": "0.1.0",
   "identifier": "com.kadewu.skillsync",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "SkillSync Mac",
+        "title": "SkillSync",
         "width": 1340,
         "height": 860,
         "minWidth": 1120,

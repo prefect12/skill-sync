@@ -1,6 +1,6 @@
 # Project Background
 
-SkillSync Mac is a desktop app for managing and synchronizing skill roots across
+SkillSync is a desktop app for managing and synchronizing skill roots across
 multiple machines with GitHub as the shared source of truth.
 
 # Product Goal

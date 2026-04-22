@@ -1,8 +1,8 @@
-# SkillSync Mac
+# SkillSync
 
 English | [简体中文](./README.zh-CN.md)
 
-SkillSync Mac is a `Tauri + React` desktop app for managing and syncing skill
+SkillSync is a `Tauri + React` desktop app for managing and syncing skill
 directories across multiple Macs with GitHub as the shared source of truth.
 
 ## What It Does
@@ -35,7 +35,7 @@ Out of scope for this build:
 ## Project Structure
 
 ```text
-skill-sync-mac/
+skill-sync/
   src/                 React UI and app state
   src/components/      Panels, lists, and root management UI
   src/lib/             Shared types, status logic, and Tauri bindings
