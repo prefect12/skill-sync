@@ -1,5 +1,9 @@
 import type {
   DiscoverRootsPayload,
+  GitHubOwner,
+  GitHubRepository,
+  GitHubRepositoryValidation,
+  GitHubStatus,
   LocalRootSnapshot,
   RemoteScanPayload,
   SkillRootConfig,
@@ -53,4 +57,23 @@ export async function syncSelectedItems(
     roots,
     operations
   });
+}
+
+export async function loadGitHubStatus() {
+  return safeInvoke<GitHubStatus>("github_status");
+}
+
+export async function loadGitHubOwners() {
+  return safeInvoke<GitHubOwner[]>("github_list_owners");
+}
+
+export async function loadGitHubRepositories(owner: string, limit = 200) {
+  return safeInvoke<GitHubRepository[]>("github_list_repositories", { owner, limit });
+}
+
+export async function validateGitHubRepository(input: {
+  fullName?: string;
+  repoUrl?: string;
+}) {
+  return safeInvoke<GitHubRepositoryValidation>("github_validate_repository", { input });
 }

@@ -10,6 +10,21 @@ type Messages = {
   appSubtitle: string;
   repoUrlLabel: string;
   repoUrlPlaceholder: string;
+  githubSectionTitle: string;
+  githubConnectedAs: (username: string) => string;
+  githubUsingLocalGh: string;
+  githubCliMissingTitle: string;
+  githubCliMissingCopy: string;
+  githubLoginRequiredTitle: string;
+  githubLoginRequiredCopy: string;
+  githubOwnerLabel: string;
+  githubRepositoryLabel: string;
+  githubRepositoryPlaceholder: string;
+  githubNoRepositories: string;
+  githubLoadingRepositories: string;
+  githubResolvedRepoLabel: string;
+  githubPermissionLabel: string;
+  githubPermissionUnknown: string;
   openRoots: string;
   openSettings: string;
   refresh: string;
@@ -46,6 +61,8 @@ type Messages = {
   nothingSelectedNote: string;
   missingRepoNote: string;
   repoRequiredAlert: string;
+  repoUrlInvalidNote: string;
+  syncDisabledReadOnlyNote: string;
   recentActivity: string;
   activityEmpty: string;
   rootsWindowTitle: string;
@@ -110,6 +127,21 @@ const messages: Record<Language, Messages> = {
     appSubtitle: "See which skills need sync, then choose the sync direction.",
     repoUrlLabel: "GitHub repository",
     repoUrlPlaceholder: "git@github.com:you/skill-sync.git",
+    githubSectionTitle: "GitHub",
+    githubConnectedAs: (username) => `Connected as ${username}`,
+    githubUsingLocalGh: "Uses your local GitHub CLI session. Git operations still run through system git.",
+    githubCliMissingTitle: "GitHub CLI not found",
+    githubCliMissingCopy: "Paste a repository URL below, or install and log into gh to browse repositories in-app.",
+    githubLoginRequiredTitle: "GitHub CLI needs login",
+    githubLoginRequiredCopy: "Run gh auth login in your terminal, or paste a repository URL below.",
+    githubOwnerLabel: "Owner",
+    githubRepositoryLabel: "Repository",
+    githubRepositoryPlaceholder: "Choose a repository",
+    githubNoRepositories: "No repositories found for this owner.",
+    githubLoadingRepositories: "Loading repositories…",
+    githubResolvedRepoLabel: "Resolved repository URL",
+    githubPermissionLabel: "Permission",
+    githubPermissionUnknown: "Permission unavailable",
     openRoots: "Skill Locations",
     openSettings: "Settings",
     refresh: "Refresh",
@@ -149,6 +181,8 @@ const messages: Record<Language, Messages> = {
     nothingSelectedNote: "Nothing selected for sync.",
     missingRepoNote: "Set a GitHub repository before loading the remote snapshot.",
     repoRequiredAlert: "Add a GitHub repository before starting sync.",
+    repoUrlInvalidNote: "Enter a valid GitHub repository URL such as https://github.com/owner/repo or git@github.com:owner/repo.git.",
+    syncDisabledReadOnlyNote: "This repository is read-only for the current GitHub account. Refresh and choose a repo with write access before syncing.",
     recentActivity: "Recent activity",
     activityEmpty: "No activity yet.",
     rootsWindowTitle: "Skill Locations",
@@ -212,6 +246,21 @@ const messages: Record<Language, Messages> = {
     appSubtitle: "查看哪些 skill 需要同步，然后选择同步方向。",
     repoUrlLabel: "GitHub 仓库",
     repoUrlPlaceholder: "git@github.com:you/skill-sync.git",
+    githubSectionTitle: "GitHub",
+    githubConnectedAs: (username) => `当前账号：${username}`,
+    githubUsingLocalGh: "直接复用本机 gh 登录态识别账号和仓库；clone/pull/push 仍然走系统 git。",
+    githubCliMissingTitle: "未检测到 GitHub CLI",
+    githubCliMissingCopy: "你可以直接填写仓库地址，或者先安装并登录 gh，再在应用里选择仓库。",
+    githubLoginRequiredTitle: "GitHub CLI 尚未登录",
+    githubLoginRequiredCopy: "先在终端执行 gh auth login，或者直接填写仓库地址。",
+    githubOwnerLabel: "Owner",
+    githubRepositoryLabel: "仓库",
+    githubRepositoryPlaceholder: "选择一个仓库",
+    githubNoRepositories: "这个 owner 下暂时没有可选仓库。",
+    githubLoadingRepositories: "仓库加载中…",
+    githubResolvedRepoLabel: "当前仓库地址",
+    githubPermissionLabel: "权限",
+    githubPermissionUnknown: "无法判断权限",
     openRoots: "Skill 目录",
     openSettings: "设置",
     refresh: "刷新",
@@ -248,6 +297,8 @@ const messages: Record<Language, Messages> = {
     nothingSelectedNote: "当前没有选中任何需要同步的条目。",
     missingRepoNote: "请先填写 GitHub 仓库，再读取远端快照。",
     repoRequiredAlert: "开始同步前，请先填写 GitHub 仓库地址。",
+    repoUrlInvalidNote: "请输入有效的 GitHub 仓库地址，例如 https://github.com/owner/repo 或 git@github.com:owner/repo.git。",
+    syncDisabledReadOnlyNote: "当前 GitHub 账号对这个仓库只有只读权限。请刷新并选择有写权限的仓库后再同步。",
     recentActivity: "最近活动",
     activityEmpty: "暂时还没有活动记录。",
     rootsWindowTitle: "Skill 目录",

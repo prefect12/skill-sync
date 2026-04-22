@@ -1,25 +1,42 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { fallbackLocalSnapshots, fallbackRemoteSnapshot, fallbackRoots } from "../lib/fallback";
+import {
+  canWriteToRepository,
+  findGitHubRepository,
+  parseGitHubRepositoryUrl,
+  resolvePreferredOwner,
+  shouldUseGitHubPicker
+} from "../lib/github";
 import { getMessages } from "../lib/i18n";
 import {
   readDefaultInstallRoots,
   readKnownSyncedIds,
+  readLastGitHubOwner,
   readRepoUrl,
   readRootConfigs,
   uniqueRoots,
   writeKnownSyncedIds,
+  writeLastGitHubOwner,
   writeRepoUrl
 } from "../lib/persistence";
 import { flattenSkillRows, buildRootGroups, needsReview } from "../lib/status";
 import {
   discoverRoots,
+  loadGitHubOwners,
+  loadGitHubRepositories,
+  loadGitHubStatus,
   loadRemoteSnapshot,
   PREVIEW_RUNTIME_ERROR,
   scanLocalRoots,
-  syncSelectedItems
+  syncSelectedItems,
+  validateGitHubRepository
 } from "../lib/tauri";
 import type {
   AppPreferences,
+  GitHubOwner,
+  GitHubRepository,
+  GitHubRepositoryValidation,
+  GitHubStatus,
   LocalRootSnapshot,
   RemoteRootSnapshot,
   SkillListRow,
@@ -30,6 +47,11 @@ import type {
 } from "../lib/types";
 
 export type MainFilter = "all" | "changed" | "conflicts" | "pending-delete";
+
+const FALLBACK_GITHUB_STATUS: GitHubStatus = {
+  cliAvailable: false,
+  authenticated: false
+};
 
 function isPreviewRuntimeError(error: unknown) {
   return String(error).includes(PREVIEW_RUNTIME_ERROR);
@@ -67,10 +89,104 @@ export function useSkillSyncState(preferences: AppPreferences) {
     Record<string, SyncOperationType | "skip" | undefined>
   >({});
   const [filter, setFilter] = useState<MainFilter>("all");
+  const [githubStatus, setGitHubStatus] = useState<GitHubStatus>(FALLBACK_GITHUB_STATUS);
+  const [githubOwners, setGitHubOwners] = useState<GitHubOwner[]>([]);
+  const [selectedOwner, setSelectedOwnerState] = useState(readLastGitHubOwner);
+  const [githubRepositories, setGitHubRepositories] = useState<GitHubRepository[]>([]);
+  const [repositoryLoadError, setRepositoryLoadError] = useState("");
+  const [repoValidation, setRepoValidation] = useState<GitHubRepositoryValidation | null>(null);
+  const [repoUrlError, setRepoUrlError] = useState("");
   const [refreshing, startRefresh] = useTransition();
   const [syncing, startSync] = useTransition();
+  const [loadingRepositories, startRepositoryLoad] = useTransition();
 
-  async function loadAll(overrideRoots?: SkillRootConfig[], overrideRepoUrl?: string) {
+  async function loadGitHubContext(localRepoUrl: string, ownerOverride?: string) {
+    let nextStatus = FALLBACK_GITHUB_STATUS;
+    const nextNotes: string[] = [];
+    let nextOwners: GitHubOwner[] = [];
+    let nextRepositories: GitHubRepository[] = [];
+    let nextRepositoryLoadError = "";
+    let nextValidation: GitHubRepositoryValidation | null = null;
+    let nextRepoError = "";
+
+    try {
+      nextStatus = await loadGitHubStatus();
+    } catch (error) {
+      if (!isPreviewRuntimeError(error)) {
+        nextNotes.push(String(error));
+      }
+    }
+
+    const usesPicker = shouldUseGitHubPicker(nextStatus);
+
+    if (usesPicker) {
+      try {
+        nextOwners = await loadGitHubOwners();
+      } catch (error) {
+        nextNotes.push(String(error));
+      }
+
+      const nextOwner = resolvePreferredOwner({
+        owners: nextOwners,
+        storedOwner: ownerOverride ?? readLastGitHubOwner(),
+        repoUrl: localRepoUrl,
+        username: nextStatus.username
+      });
+
+      setSelectedOwnerState(nextOwner);
+      writeLastGitHubOwner(nextOwner);
+
+      if (nextOwner) {
+        try {
+          nextRepositories = await loadGitHubRepositories(nextOwner);
+        } catch (error) {
+          nextRepositoryLoadError = String(error);
+          nextNotes.push(nextRepositoryLoadError);
+        }
+      }
+
+      if (localRepoUrl.trim()) {
+        try {
+          nextValidation = await validateGitHubRepository({ repoUrl: localRepoUrl });
+        } catch (error) {
+          nextRepoError = String(error);
+        }
+      }
+    } else {
+      setSelectedOwnerState("");
+      writeLastGitHubOwner("");
+
+      if (localRepoUrl.trim()) {
+        nextValidation = parseGitHubRepositoryUrl(localRepoUrl);
+        if (!nextValidation) {
+          nextRepoError = messages.repoUrlInvalidNote;
+        }
+      }
+
+      if (nextStatus.note && !isPreviewRuntimeError(nextStatus.note)) {
+        nextNotes.push(nextStatus.note);
+      }
+    }
+
+    setGitHubStatus(nextStatus);
+    setGitHubOwners(nextOwners);
+    setGitHubRepositories(nextRepositories);
+    setRepositoryLoadError(nextRepositoryLoadError);
+    setRepoValidation(nextValidation);
+    setRepoUrlError(nextRepoError);
+
+    return {
+      usesPicker,
+      notes: nextNotes,
+      repoError: nextRepoError
+    };
+  }
+
+  async function loadAll(
+    overrideRoots?: SkillRootConfig[],
+    overrideRepoUrl?: string,
+    ownerOverride?: string
+  ) {
     const localRepoUrl = overrideRepoUrl ?? repoUrl;
     const customRoots = readRootConfigs();
     let discovered = fallbackRoots();
@@ -81,6 +197,9 @@ export function useSkillSyncState(preferences: AppPreferences) {
       overrideRoots ?? uniqueRoots([...fallbackRoots().roots, ...customRoots])
     );
     const mergedNotes: string[] = [];
+
+    const github = await loadGitHubContext(localRepoUrl, ownerOverride);
+    mergedNotes.push(...github.notes);
 
     try {
       discovered = await discoverRoots();
@@ -107,7 +226,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
       local = fallbackLocalSnapshots(mergedRoots);
     }
 
-    if (localRepoUrl.trim()) {
+    if (localRepoUrl.trim() && !github.repoError) {
       try {
         const payload = await loadRemoteSnapshot(localRepoUrl, mergedRoots);
         remote = payload;
@@ -118,6 +237,8 @@ export function useSkillSyncState(preferences: AppPreferences) {
         }
         remote = fallbackRemoteSnapshot(mergedRoots);
       }
+    } else if (github.repoError) {
+      remote = { roots: [], notes: [github.repoError] };
     } else {
       remote = { roots: [], notes: [messages.missingRepoNote] };
     }
@@ -139,6 +260,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
     const syncFromStorage = () => {
       setRepoUrl(readRepoUrl());
       setKnownSyncedIds(readKnownSyncedIds());
+      setSelectedOwnerState(readLastGitHubOwner());
       void loadAll();
     };
 
@@ -189,6 +311,13 @@ export function useSkillSyncState(preferences: AppPreferences) {
     [allRows]
   );
 
+  const usesGitHubPicker = shouldUseGitHubPicker(githubStatus);
+  const selectedRepository = findGitHubRepository(githubRepositories, repoUrl);
+  const selectedPermission =
+    repoValidation?.viewerPermission ?? selectedRepository?.viewerPermission;
+  const syncBlockedByPermission =
+    Boolean(selectedPermission) && !canWriteToRepository(selectedPermission);
+
   function toggleSkill(rowId: string) {
     setSelectedIds((current) => {
       const next = new Set(current);
@@ -230,6 +359,57 @@ export function useSkillSyncState(preferences: AppPreferences) {
     return allRows.filter((item) => selectedIds.has(item.row.id));
   }
 
+  function setManualRepoUrl(value: string) {
+    setRepoUrl(value);
+
+    if (!value.trim()) {
+      setRepoValidation(null);
+      setRepoUrlError("");
+      return;
+    }
+
+    const parsed = parseGitHubRepositoryUrl(value);
+    setRepoValidation(parsed);
+    setRepoUrlError(parsed ? "" : messages.repoUrlInvalidNote);
+  }
+
+  function chooseOwner(nextOwner: string) {
+    setSelectedOwnerState(nextOwner);
+    writeLastGitHubOwner(nextOwner);
+    setGitHubRepositories([]);
+    setRepositoryLoadError("");
+    setRepoValidation(null);
+    setRepoUrl("");
+    setRepoUrlError("");
+
+    startRepositoryLoad(() => {
+      void loadAll(rootConfigs, "", nextOwner);
+    });
+  }
+
+  function chooseRepository(fullName: string) {
+    const repository =
+      githubRepositories.find((item) => item.fullName === fullName) ?? null;
+    if (!repository) {
+      return;
+    }
+
+    const validation: GitHubRepositoryValidation = {
+      fullName: repository.fullName,
+      url: repository.url,
+      sshUrl: repository.sshUrl,
+      viewerPermission: repository.viewerPermission
+    };
+
+    setRepoValidation(validation);
+    setRepoUrlError("");
+    setRepoUrl(repository.url);
+
+    startRefresh(() => {
+      void loadAll(rootConfigs, repository.url, repository.owner);
+    });
+  }
+
   async function runSync(operations: SyncOperation[]) {
     if (!operations.length) {
       setNotes((current) => current.concat(messages.nothingSelectedNote));
@@ -248,7 +428,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
       setNotes((current) => current.concat(result.notes));
       setSelectedIds(new Set());
       setReviewDecisions({});
-      await loadAll(rootConfigs, repoUrl);
+      await loadAll(rootConfigs, repoUrl, selectedOwner);
     } catch (error) {
       setNotes((current) => current.concat(String(error)));
     }
@@ -256,8 +436,17 @@ export function useSkillSyncState(preferences: AppPreferences) {
 
   function syncSelected() {
     if (!repoUrl.trim()) {
-      window.alert(messages.repoRequiredAlert);
       setNotes((current) => current.concat(messages.repoRequiredAlert));
+      return;
+    }
+
+    if (repoUrlError) {
+      setNotes((current) => current.concat(repoUrlError));
+      return;
+    }
+
+    if (syncBlockedByPermission) {
+      setNotes((current) => current.concat(messages.syncDisabledReadOnlyNote));
       return;
     }
 
@@ -308,7 +497,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
 
   function refresh() {
     startRefresh(() => {
-      void loadAll();
+      void loadAll(undefined, repoUrl, selectedOwner);
     });
   }
 
@@ -317,11 +506,27 @@ export function useSkillSyncState(preferences: AppPreferences) {
   const visibleSelectedCount = filteredRows.filter((item) => selectedIds.has(item.row.id)).length;
   const allVisibleSelected =
     filteredRows.length > 0 && visibleSelectedCount === filteredRows.length;
+  const canSync =
+    Boolean(repoUrl.trim()) && !repoUrlError && !syncBlockedByPermission;
 
   return {
     messages,
     repoUrl,
     setRepoUrl,
+    setManualRepoUrl,
+    repoUrlError,
+    repoValidation,
+    usesGitHubPicker,
+    githubStatus,
+    githubOwners,
+    githubRepositories,
+    selectedOwner,
+    chooseOwner,
+    chooseRepository,
+    selectedRepository,
+    selectedPermission,
+    loadingRepositories,
+    repositoryLoadError,
     filter,
     setFilter,
     counts,
@@ -342,6 +547,8 @@ export function useSkillSyncState(preferences: AppPreferences) {
     refresh,
     refreshing,
     syncing,
+    canSync,
+    syncBlockedByPermission,
     defaultInstallRoots: readDefaultInstallRoots()
   };
 }

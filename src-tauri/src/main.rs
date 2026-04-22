@@ -6,6 +6,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -121,22 +122,104 @@ struct ManifestFile {
     skills: Vec<ManifestSkill>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitHubStatusPayload {
+    cli_available: bool,
+    authenticated: bool,
+    username: Option<String>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitHubOwner {
+    login: String,
+    kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitHubRepository {
+    owner: String,
+    name: String,
+    full_name: String,
+    url: String,
+    ssh_url: Option<String>,
+    description: Option<String>,
+    is_private: bool,
+    viewer_permission: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitHubValidationInput {
+    full_name: Option<String>,
+    repo_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitHubRepositoryValidation {
+    full_name: String,
+    url: String,
+    ssh_url: Option<String>,
+    viewer_permission: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitHubRepoListEntry {
+    name: String,
+    name_with_owner: String,
+    url: String,
+    ssh_url: Option<String>,
+    description: Option<String>,
+    is_private: bool,
+    viewer_permission: Option<String>,
+}
+
+#[derive(Debug)]
+struct CommandResponse {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+#[derive(Debug)]
+enum CommandError {
+    NotFound(String),
+    Failed(String),
+}
+
+impl CommandError {
+    fn into_message(self) -> String {
+        match self {
+            CommandError::NotFound(message) | CommandError::Failed(message) => message,
+        }
+    }
+}
+
 fn home_dir() -> Result<PathBuf, String> {
     std::env::var("HOME")
         .map(PathBuf::from)
         .map_err(|_| "HOME is not available in this environment".to_string())
 }
 
-fn expand_home(input: &str) -> Result<PathBuf, String> {
+fn expand_home_with_home(home: &Path, input: &str) -> Result<PathBuf, String> {
     if input == "~" {
-        return home_dir();
+        return Ok(home.to_path_buf());
     }
 
     if let Some(stripped) = input.strip_prefix("~/") {
-        return Ok(home_dir()?.join(stripped));
+        return Ok(home.join(stripped));
     }
 
     Ok(PathBuf::from(input))
+}
+
+fn expand_home(input: &str) -> Result<PathBuf, String> {
+    expand_home_with_home(&home_dir()?, input)
 }
 
 fn normalize_remote_path(input: &str) -> Result<String, String> {
@@ -150,6 +233,129 @@ fn normalize_remote_path(input: &str) -> Result<String, String> {
     }
 
     Ok(trimmed.replace('\\', "/"))
+}
+
+fn workspace_path_for_home(home: &Path, repo_url: &str) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    repo_url.hash(&mut hasher);
+    let hash = hasher.finish();
+    home.join("Library/Application Support/SkillSync/repos")
+        .join(format!("{hash}"))
+}
+
+fn normalize_repo_full_name(input: &str) -> Result<String, String> {
+    let trimmed = input
+        .trim()
+        .trim_matches('/')
+        .trim_end_matches(".git")
+        .trim();
+    let parts = trimmed
+        .split('/')
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>();
+
+    if parts.len() != 2 {
+        return Err(format!("Invalid GitHub repository identifier: {input}"));
+    }
+
+    Ok(format!("{}/{}", parts[0], parts[1]))
+}
+
+fn build_repo_validation(full_name: &str) -> GitHubRepositoryValidation {
+    GitHubRepositoryValidation {
+        full_name: full_name.to_string(),
+        url: format!("https://github.com/{full_name}"),
+        ssh_url: Some(format!("git@github.com:{full_name}.git")),
+        viewer_permission: None,
+    }
+}
+
+fn parse_repo_url(repo_url: &str) -> Result<GitHubRepositoryValidation, String> {
+    let trimmed = repo_url.trim();
+    if trimmed.is_empty() {
+        return Err("GitHub repository URL must not be empty.".into());
+    }
+
+    if let Some(value) = trimmed.strip_prefix("git@github.com:") {
+        let full_name = normalize_repo_full_name(value)?;
+        return Ok(build_repo_validation(&full_name));
+    }
+
+    if let Some(value) = trimmed.strip_prefix("ssh://git@github.com/") {
+        let full_name = normalize_repo_full_name(value)?;
+        return Ok(build_repo_validation(&full_name));
+    }
+
+    if !trimmed.contains(':') {
+        if let Ok(full_name) = normalize_repo_full_name(trimmed) {
+            return Ok(build_repo_validation(&full_name));
+        }
+    }
+
+    let with_scheme = if trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+    {
+        trimmed.to_string()
+    } else {
+        format!("https://{trimmed}")
+    };
+
+    let parsed = url::Url::parse(&with_scheme)
+        .map_err(|_| format!("Invalid GitHub repository URL: {repo_url}"))?;
+    if parsed.host_str().unwrap_or_default().to_lowercase() != "github.com" {
+        return Err(format!("GitHub repository URL must point to github.com: {repo_url}"));
+    }
+
+    let full_name = normalize_repo_full_name(parsed.path())?;
+    Ok(build_repo_validation(&full_name))
+}
+
+fn parse_owner_lines(username: &str, org_output: &str) -> Vec<GitHubOwner> {
+    let mut owners = vec![GitHubOwner {
+        login: username.trim().to_string(),
+        kind: "user".into(),
+    }];
+
+    let mut orgs = org_output
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|login| GitHubOwner {
+            login: login.to_string(),
+            kind: "org".into(),
+        })
+        .collect::<Vec<_>>();
+    orgs.sort_by(|a, b| a.login.cmp(&b.login));
+    owners.extend(orgs);
+    owners
+}
+
+fn map_repo_entries(entries: Vec<GitHubRepoListEntry>) -> Vec<GitHubRepository> {
+    let mut repositories = entries
+        .into_iter()
+        .map(|entry| {
+            let owner = entry
+                .name_with_owner
+                .split('/')
+                .next()
+                .unwrap_or_default()
+                .to_string();
+
+            GitHubRepository {
+                owner,
+                name: entry.name,
+                full_name: entry.name_with_owner,
+                url: entry.url,
+                ssh_url: entry.ssh_url,
+                description: entry.description,
+                is_private: entry.is_private,
+                viewer_permission: entry.viewer_permission,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    repositories.sort_by(|a, b| a.full_name.cmp(&b.full_name));
+    repositories
 }
 
 fn system_time_to_ms(value: SystemTime) -> u64 {
@@ -290,17 +496,14 @@ fn scan_root(config: &SkillRootConfig) -> Result<LocalRootSnapshot, String> {
 }
 
 fn skill_sync_workspace(repo_url: &str) -> Result<PathBuf, String> {
-    let mut hasher = DefaultHasher::new();
-    repo_url.hash(&mut hasher);
-    let hash = hasher.finish();
-    let path = home_dir()?.join("Library/Application Support/SkillSync/repos").join(format!("{hash}"));
+    let path = workspace_path_for_home(&home_dir()?, repo_url);
     fs::create_dir_all(&path)
         .map_err(|error| format!("Failed to create workspace {}: {error}", path.display()))?;
     Ok(path)
 }
 
-fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
-    let mut command = Command::new("git");
+fn run_command(binary: &str, repo_dir: Option<&Path>, args: &[&str]) -> Result<CommandResponse, CommandError> {
+    let mut command = Command::new(binary);
     if let Some(repo_dir) = repo_dir {
         command.arg("-C").arg(repo_dir);
     }
@@ -308,13 +511,38 @@ fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
 
     let output = command
         .output()
-        .map_err(|error| format!("Failed to start git {:?}: {error}", args))?;
+        .map_err(|error| match error.kind() {
+            ErrorKind::NotFound => CommandError::NotFound(format!("{binary} is not installed or not on PATH.")),
+            _ => CommandError::Failed(format!("Failed to start {binary} {:?}: {error}", args)),
+        })?;
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    Ok(CommandResponse {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    })
+}
+
+fn run_command_checked(binary: &str, repo_dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
+    let response = run_command(binary, repo_dir, args).map_err(CommandError::into_message)?;
+
+    if !response.success {
+        return Err(if response.stderr.is_empty() {
+            response.stdout
+        } else {
+            response.stderr
+        });
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(response.stdout)
+}
+
+fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
+    run_command_checked("git", repo_dir, args)
+}
+
+fn run_gh(args: &[&str]) -> Result<String, String> {
+    run_command_checked("gh", None, args)
 }
 
 fn ensure_repo_clone(repo_url: &str) -> Result<PathBuf, String> {
@@ -549,6 +777,136 @@ fn write_manifest(repo_dir: &Path, roots: &[SkillRootConfig]) -> Result<(), Stri
 }
 
 #[tauri::command]
+fn github_status() -> Result<GitHubStatusPayload, String> {
+    match run_command("gh", None, &["auth", "status"]) {
+        Ok(response)
+            if response.success
+                && !response.stderr.to_lowercase().contains("failed to log in")
+                && !response.stderr.to_lowercase().contains("invalid") =>
+        {
+            let username = run_gh(&["api", "user", "-q", ".login"]);
+            match username {
+                Ok(username) => Ok(GitHubStatusPayload {
+                    cli_available: true,
+                    authenticated: true,
+                    username: Some(username.trim().to_string()),
+                    note: None,
+                }),
+                Err(error) => Ok(GitHubStatusPayload {
+                    cli_available: true,
+                    authenticated: false,
+                    username: None,
+                    note: Some(error),
+                }),
+            }
+        }
+        Ok(response) => Ok(GitHubStatusPayload {
+            cli_available: true,
+            authenticated: false,
+            username: None,
+            note: Some(if response.stderr.is_empty() {
+                "GitHub CLI is installed but not authenticated.".into()
+            } else {
+                response.stderr
+            }),
+        }),
+        Err(CommandError::NotFound(message)) => Ok(GitHubStatusPayload {
+            cli_available: false,
+            authenticated: false,
+            username: None,
+            note: Some(message),
+        }),
+        Err(CommandError::Failed(message)) => Ok(GitHubStatusPayload {
+            cli_available: true,
+            authenticated: false,
+            username: None,
+            note: Some(message),
+        }),
+    }
+}
+
+#[tauri::command]
+fn github_list_owners() -> Result<Vec<GitHubOwner>, String> {
+    let status = github_status()?;
+    if !status.authenticated {
+        return Err(status
+            .note
+            .unwrap_or_else(|| "GitHub CLI is not authenticated.".into()));
+    }
+
+    let username = status
+        .username
+        .ok_or_else(|| "GitHub CLI did not return a username.".to_string())?;
+    let org_output = run_gh(&["api", "user/orgs", "-q", ".[].login"]).unwrap_or_default();
+    Ok(parse_owner_lines(&username, &org_output))
+}
+
+#[tauri::command]
+fn github_list_repositories(owner: String, limit: Option<u32>) -> Result<Vec<GitHubRepository>, String> {
+    let trimmed_owner = owner.trim();
+    if trimmed_owner.is_empty() {
+        return Err("GitHub owner must not be empty.".into());
+    }
+
+    let limit_value = limit.unwrap_or(200).max(1).to_string();
+    let output = run_gh(&[
+        "repo",
+        "list",
+        trimmed_owner,
+        "--limit",
+        limit_value.as_str(),
+        "--json",
+        "name,nameWithOwner,url,sshUrl,description,isPrivate,viewerPermission",
+    ])?;
+    let entries = serde_json::from_str::<Vec<GitHubRepoListEntry>>(&output)
+        .map_err(|error| format!("Failed to parse GitHub repository list: {error}"))?;
+
+    Ok(map_repo_entries(entries))
+}
+
+#[tauri::command]
+fn github_validate_repository(input: GitHubValidationInput) -> Result<GitHubRepositoryValidation, String> {
+    let parsed = if let Some(full_name) = input.full_name.as_deref() {
+        build_repo_validation(&normalize_repo_full_name(full_name)?)
+    } else if let Some(repo_url) = input.repo_url.as_deref() {
+        parse_repo_url(repo_url)?
+    } else {
+        return Err("Provide either a GitHub repository full name or URL.".into());
+    };
+
+    match run_command("gh", None, &["auth", "status"]) {
+        Ok(response) if response.success => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct GitHubRepoViewEntry {
+                name_with_owner: String,
+                url: String,
+                ssh_url: Option<String>,
+                viewer_permission: Option<String>,
+            }
+
+            let output = run_gh(&[
+                "repo",
+                "view",
+                parsed.full_name.as_str(),
+                "--json",
+                "nameWithOwner,url,sshUrl,viewerPermission",
+            ])?;
+            let entry = serde_json::from_str::<GitHubRepoViewEntry>(&output)
+                .map_err(|error| format!("Failed to parse GitHub repository details: {error}"))?;
+
+            Ok(GitHubRepositoryValidation {
+                full_name: entry.name_with_owner,
+                url: entry.url,
+                ssh_url: entry.ssh_url,
+                viewer_permission: entry.viewer_permission,
+            })
+        }
+        _ => Ok(parsed),
+    }
+}
+
+#[tauri::command]
 fn discover_roots(base_dir: Option<String>) -> Result<DiscoverRootsPayload, String> {
     let home = home_dir()?;
     let mut roots = vec![
@@ -752,6 +1110,10 @@ fn sync_selected_items(
 fn main() -> io::Result<()> {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            github_status,
+            github_list_owners,
+            github_list_repositories,
+            github_validate_repository,
             discover_roots,
             scan_local_roots,
             load_remote_snapshot,
@@ -759,4 +1121,70 @@ fn main() -> io::Result<()> {
         ])
         .run(tauri::generate_context!())
         .map_err(|error| io::Error::new(io::ErrorKind::Other, error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_remote_path_rejects_traversal() {
+        assert!(normalize_remote_path("../roots/demo").is_err());
+    }
+
+    #[test]
+    fn expand_home_with_home_expands_tilde_paths() {
+        let home = PathBuf::from("/tmp/skillsync-home");
+        assert_eq!(
+            expand_home_with_home(&home, "~/skills").unwrap(),
+            home.join("skills")
+        );
+    }
+
+    #[test]
+    fn workspace_path_is_stable_for_same_repo() {
+        let home = PathBuf::from("/tmp/skillsync-home");
+        let first = workspace_path_for_home(&home, "https://github.com/acme/skills");
+        let second = workspace_path_for_home(&home, "https://github.com/acme/skills");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn parse_repo_url_accepts_https_and_ssh_forms() {
+        let https = parse_repo_url("https://github.com/acme/skills.git").unwrap();
+        let ssh = parse_repo_url("git@github.com:acme/skills.git").unwrap();
+
+        assert_eq!(https.full_name, "acme/skills");
+        assert_eq!(ssh.full_name, "acme/skills");
+    }
+
+    #[test]
+    fn parse_repo_url_rejects_non_github_hosts() {
+        assert!(parse_repo_url("https://gitlab.com/acme/skills").is_err());
+    }
+
+    #[test]
+    fn parse_owner_lines_maps_user_and_orgs() {
+        let owners = parse_owner_lines("prefect12", "AhaAITeam\nEnglish4Developers\n");
+        assert_eq!(owners[0].login, "prefect12");
+        assert_eq!(owners[0].kind, "user");
+        assert_eq!(owners[1].kind, "org");
+        assert_eq!(owners[2].login, "English4Developers");
+    }
+
+    #[test]
+    fn map_repo_entries_preserves_permission_fields() {
+        let repositories = map_repo_entries(vec![GitHubRepoListEntry {
+            name: "skill-sync".into(),
+            name_with_owner: "prefect12/skill-sync".into(),
+            url: "https://github.com/prefect12/skill-sync".into(),
+            ssh_url: Some("git@github.com:prefect12/skill-sync.git".into()),
+            description: Some("sync".into()),
+            is_private: true,
+            viewer_permission: Some("ADMIN".into()),
+        }]);
+
+        assert_eq!(repositories[0].owner, "prefect12");
+        assert_eq!(repositories[0].viewer_permission.as_deref(), Some("ADMIN"));
+    }
 }

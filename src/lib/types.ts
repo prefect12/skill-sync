@@ -8,6 +8,7 @@ export type ProviderHint = "codex" | "claude" | "generic";
 export type Language = "en" | "zh-CN";
 export type AppearanceMode = "system" | "light" | "dark";
 export type WindowView = "main" | "roots" | "settings";
+export type GitHubOwnerKind = "user" | "org";
 
 export type SyncState =
   | "in-sync"
@@ -118,4 +119,34 @@ export interface SyncResult {
   remoteRoots: RemoteRootSnapshot[];
   notes: string[];
   syncedRowIds: string[];
+}
+
+export interface GitHubStatus {
+  cliAvailable: boolean;
+  authenticated: boolean;
+  username?: string;
+  note?: string;
+}
+
+export interface GitHubOwner {
+  login: string;
+  kind: GitHubOwnerKind;
+}
+
+export interface GitHubRepository {
+  owner: string;
+  name: string;
+  fullName: string;
+  url: string;
+  sshUrl?: string;
+  description?: string;
+  isPrivate: boolean;
+  viewerPermission?: string;
+}
+
+export interface GitHubRepositoryValidation {
+  fullName: string;
+  url: string;
+  sshUrl?: string;
+  viewerPermission?: string;
 }

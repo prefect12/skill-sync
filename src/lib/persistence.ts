@@ -11,6 +11,7 @@ export const SYNCED_IDS_KEY = "skill-sync/known-synced-ids";
 export const DEFAULT_INSTALL_ROOTS_KEY = "skill-sync/default-install-roots";
 export const LANGUAGE_KEY = "skill-sync/language";
 export const PREFERENCES_KEY = "skill-sync/preferences";
+export const LAST_GITHUB_OWNER_KEY = "skill-sync/github-last-owner";
 
 export const DEFAULT_PREFERENCES: AppPreferences = {
   language: "en",
@@ -52,6 +53,19 @@ export function readPreferences(): AppPreferences {
 
 export function writePreferences(preferences: AppPreferences) {
   writeJson(PREFERENCES_KEY, preferences);
+}
+
+export function readLastGitHubOwner() {
+  return window.localStorage.getItem(LAST_GITHUB_OWNER_KEY) ?? "";
+}
+
+export function writeLastGitHubOwner(owner: string) {
+  if (!owner.trim()) {
+    window.localStorage.removeItem(LAST_GITHUB_OWNER_KEY);
+    return;
+  }
+
+  window.localStorage.setItem(LAST_GITHUB_OWNER_KEY, owner.trim());
 }
 
 export function readRootConfigs() {

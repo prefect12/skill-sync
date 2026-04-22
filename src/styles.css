@@ -189,6 +189,56 @@ h3 {
   justify-items: end;
 }
 
+.toolbar-stack {
+  flex: 1;
+  display: grid;
+  gap: 12px;
+  justify-items: end;
+}
+
+.github-card {
+  width: min(100%, 860px);
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.github-card-head,
+.github-meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.helper-copy,
+.inline-note {
+  color: var(--text-soft);
+  line-height: 1.45;
+}
+
+.github-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.github-inline-field {
+  grid-column: 1 / -1;
+}
+
+.inline-note {
+  margin: 0;
+  font-size: 13px;
+}
+
+.inline-note.warning {
+  color: var(--warning);
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -565,6 +615,7 @@ h3 {
   }
 
   .toolbar-actions,
+  .toolbar-stack,
   .toolbar-buttons {
     justify-items: stretch;
     justify-content: stretch;
@@ -576,6 +627,7 @@ h3 {
   }
 
   .summary-strip,
+  .github-grid,
   .detail-grid,
   .form-grid {
     grid-template-columns: 1fr;

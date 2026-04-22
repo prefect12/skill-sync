@@ -58,15 +58,128 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
             <h1>{messages.skillsSectionTitle}</h1>
             <p className="toolbar-subtitle">{messages.appSubtitle}</p>
           </div>
-          <div className="toolbar-actions">
-            <label className="field repo-field">
-              <span>{messages.repoUrlLabel}</span>
-              <input
-                value={state.repoUrl}
-                onChange={(event) => state.setRepoUrl(event.target.value)}
-                placeholder={messages.repoUrlPlaceholder}
-              />
-            </label>
+
+          <div className="toolbar-stack">
+            <section className="github-card">
+              <div className="github-card-head">
+                <div>
+                  <p className="toolbar-kicker">{messages.githubSectionTitle}</p>
+                  <h2>
+                    {state.usesGitHubPicker && state.githubStatus.username
+                      ? messages.githubConnectedAs(state.githubStatus.username)
+                      : state.githubStatus.cliAvailable
+                        ? messages.githubLoginRequiredTitle
+                        : messages.githubCliMissingTitle}
+                  </h2>
+                  <p className="helper-copy">
+                    {state.usesGitHubPicker
+                      ? messages.githubUsingLocalGh
+                      : state.githubStatus.cliAvailable
+                        ? messages.githubLoginRequiredCopy
+                        : messages.githubCliMissingCopy}
+                  </p>
+                </div>
+                <span className="status-pill neutral">
+                  {state.usesGitHubPicker ? "gh" : "URL"}
+                </span>
+              </div>
+
+              {state.usesGitHubPicker ? (
+                <div className="github-grid">
+                  <label className="field">
+                    <span>{messages.githubOwnerLabel}</span>
+                    <select
+                      value={state.selectedOwner}
+                      onChange={(event) => state.chooseOwner(event.target.value)}
+                      disabled={state.loadingRepositories || state.githubOwners.length === 0}
+                    >
+                      {state.githubOwners.map((owner) => (
+                        <option key={owner.login} value={owner.login}>
+                          {owner.login}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="field">
+                    <span>{messages.githubRepositoryLabel}</span>
+                    <select
+                      value={state.selectedRepository?.fullName ?? state.repoValidation?.fullName ?? ""}
+                      onChange={(event) => state.chooseRepository(event.target.value)}
+                      disabled={
+                        state.loadingRepositories ||
+                        !state.selectedOwner ||
+                        state.githubRepositories.length === 0
+                      }
+                    >
+                      <option value="">
+                        {state.loadingRepositories
+                          ? messages.githubLoadingRepositories
+                          : messages.githubRepositoryPlaceholder}
+                      </option>
+                      {state.repoValidation?.fullName &&
+                      !state.githubRepositories.some(
+                        (repository) => repository.fullName === state.repoValidation?.fullName
+                      ) ? (
+                        <option value={state.repoValidation.fullName}>
+                          {state.repoValidation.fullName.split("/")[1]}
+                        </option>
+                      ) : null}
+                      {state.githubRepositories.map((repository) => (
+                        <option key={repository.fullName} value={repository.fullName}>
+                          {repository.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="field github-inline-field">
+                    <span>{messages.githubResolvedRepoLabel}</span>
+                    <input value={state.repoUrl} readOnly placeholder={messages.repoUrlPlaceholder} />
+                  </label>
+
+                  <div className="field github-inline-field">
+                    <span>{messages.githubPermissionLabel}</span>
+                    <div className="github-meta-row">
+                      <strong>{state.selectedPermission ?? messages.githubPermissionUnknown}</strong>
+                      {state.syncBlockedByPermission ? (
+                        <span className="inline-note warning">
+                          {messages.syncDisabledReadOnlyNote}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {!state.loadingRepositories &&
+                  state.selectedOwner &&
+                  state.repositoryLoadError ? (
+                    <p className="inline-note warning form-span">{state.repositoryLoadError}</p>
+                  ) : null}
+
+                  {!state.loadingRepositories &&
+                  state.selectedOwner &&
+                  state.githubRepositories.length === 0 &&
+                  !state.repositoryLoadError ? (
+                    <p className="inline-note form-span">{messages.githubNoRepositories}</p>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="github-grid">
+                  <label className="field github-inline-field">
+                    <span>{messages.repoUrlLabel}</span>
+                    <input
+                      value={state.repoUrl}
+                      onChange={(event) => state.setManualRepoUrl(event.target.value)}
+                      placeholder={messages.repoUrlPlaceholder}
+                    />
+                  </label>
+                  {state.repoUrlError ? (
+                    <p className="inline-note warning form-span">{state.repoUrlError}</p>
+                  ) : null}
+                </div>
+              )}
+            </section>
+
             <div className="toolbar-buttons">
               <button className="secondary-button" onClick={() => void openAppWindow("roots")}>
                 {messages.openRoots}
@@ -87,7 +200,7 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
               <button
                 className="primary-button"
                 onClick={state.syncSelected}
-                disabled={state.syncing || state.selectedCount === 0}
+                disabled={state.syncing || state.selectedCount === 0 || !state.canSync}
               >
                 {state.syncing ? messages.syncing : messages.syncNow(state.selectedCount)}
               </button>

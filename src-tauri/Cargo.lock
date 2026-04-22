@@ -3026,6 +3026,7 @@ dependencies = [
  "sha2",
  "tauri",
  "tauri-build",
+ "url",
 ]
 
 [[package]]
