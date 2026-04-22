@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 1420",
     "build": "tsc && vite build",
+    "release:check": "node scripts/check-release-versions.mjs",
     "test": "vitest run",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "tauri": "npx tauri"
