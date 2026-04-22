@@ -135,7 +135,7 @@ type Messages = {
 
 const messages: Record<Language, Messages> = {
   en: {
-    appName: "SkillSync Mac",
+    appName: "SkillSync",
     appSubtitle: "See which skills need sync, then choose the sync direction.",
     repoUrlLabel: "GitHub repository",
     repoUrlPlaceholder: "git@github.com:you/skill-sync.git",
@@ -239,7 +239,7 @@ const messages: Record<Language, Messages> = {
     setAsDefault: "Set as default for provider",
     clearDefault: "Clear default",
     settingsTitle: "Settings",
-    settingsSubtitle: "Choose global preferences for SkillSync Mac.",
+    settingsSubtitle: "Choose global preferences for SkillSync.",
     settingsGeneral: "General",
     settingsAdvanced: "Advanced",
     languageLabel: "Interface language",
@@ -275,7 +275,7 @@ const messages: Record<Language, Messages> = {
     skippedReviewedNote: (count) => `Skipped ${count} reviewed item(s).`
   },
   "zh-CN": {
-    appName: "SkillSync Mac",
+    appName: "SkillSync",
     appSubtitle: "查看哪些 skill 需要同步，然后选择同步方向。",
     repoUrlLabel: "GitHub 仓库",
     repoUrlPlaceholder: "git@github.com:you/skill-sync.git",
@@ -371,7 +371,7 @@ const messages: Record<Language, Messages> = {
     setAsDefault: "设为该 provider 的默认目录",
     clearDefault: "清除默认",
     settingsTitle: "设置",
-    settingsSubtitle: "调整 SkillSync Mac 的全局偏好。",
+    settingsSubtitle: "调整 SkillSync 的全局偏好。",
     settingsGeneral: "通用",
     settingsAdvanced: "高级",
     languageLabel: "界面语言",
