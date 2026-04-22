@@ -1,5 +1,7 @@
 # SkillSync Mac
 
+English | [简体中文](./README.zh-CN.md)
+
 SkillSync Mac is a `Tauri + React` desktop app for managing and syncing skill
 directories across multiple Macs with GitHub as the shared source of truth.
 
@@ -67,6 +69,12 @@ cd src-tauri
 cargo check
 ```
 
+Check release version alignment before tagging:
+
+```bash
+npm run release:check
+```
+
 ## Sync Model
 
 - The user supplies a GitHub repository URL.
@@ -91,3 +99,33 @@ The Tauri config is set up for macOS DMG bundling. This repository currently
 includes a placeholder icon and is suitable for local development and internal
 iteration. Before public release, replace the placeholder icon, finalize bundle
 metadata, and decide on signing/notarization.
+
+## Release Process
+
+This repository includes GitHub Actions release automation in
+`.github/workflows/release.yml`.
+
+Current behavior:
+
+- Trigger on pushed tags that match `v*`
+- Support manual reruns from `Actions -> Release`
+- Build unsigned macOS DMGs for both Apple Silicon and Intel targets
+- Create or update the matching GitHub Release and upload the DMG assets
+
+Release steps:
+
+1. Update the version in `package.json`, `src-tauri/tauri.conf.json`, and
+   `src-tauri/Cargo.toml`
+2. Run `npm run release:check`
+3. Commit the version bump
+4. Push a tag such as `v0.1.0`
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow uses the default `GITHUB_TOKEN`, so no extra secrets are required
+for unsigned releases. If you later want signed and notarized builds, add the
+Apple signing and notarization secrets in GitHub Actions and extend the same
+workflow.

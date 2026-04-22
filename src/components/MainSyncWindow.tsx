@@ -1,9 +1,21 @@
+import { AppBrand } from "./AppBrand";
 import { formatActionLabel, formatStateLabel, getMessages } from "../lib/i18n";
 import { openAppWindow } from "../lib/windowing";
 import { useSkillSyncState, type MainFilter } from "../state/useSkillSyncState";
 import type { AppPreferences, Language, SkillListRow, SyncOperationType } from "../lib/types";
 
 const FILTERS: MainFilter[] = ["all", "changed", "conflicts", "pending-delete"];
+
+function SettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M9.06 3.45a1 1 0 0 1 .98-.79h3.92a1 1 0 0 1 .98.79l.37 1.67a7.91 7.91 0 0 1 1.49.86l1.6-.52a1 1 0 0 1 1.11.37l1.96 3.39a1 1 0 0 1-.14 1.16l-1.2 1.23a8.09 8.09 0 0 1 0 1.72l1.2 1.23a1 1 0 0 1 .14 1.16l-1.96 3.39a1 1 0 0 1-1.11.37l-1.6-.52a7.91 7.91 0 0 1-1.49.86l-.37 1.67a1 1 0 0 1-.98.79h-3.92a1 1 0 0 1-.98-.79l-.37-1.67a7.91 7.91 0 0 1-1.49-.86l-1.6.52a1 1 0 0 1-1.11-.37l-1.96-3.39a1 1 0 0 1 .14-1.16l1.2-1.23a8.09 8.09 0 0 1 0-1.72l-1.2-1.23a1 1 0 0 1-.14-1.16l1.96-3.39a1 1 0 0 1 1.11-.37l1.6.52a7.91 7.91 0 0 1 1.49-.86l.37-1.67ZM12 9.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
 
 function formatTimestamp(value?: number) {
   if (!value) {
@@ -48,18 +60,71 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
   const selectedItem = state.selectedItem;
   const selectedRow = selectedItem?.row;
   const selectedRoot = selectedItem?.root;
+  const heroMetrics = [
+    {
+      key: "skills",
+      label: messages.skillsSectionTitle,
+      value: state.allRows.length,
+      note: messages.skillsCount(state.allRows.length)
+    },
+    {
+      key: "changed",
+      label: messages.filterChanged(state.counts.changed),
+      value: state.counts.changed,
+      note: state.counts.changed > 0 ? messages.changed : messages.inSync
+    },
+    {
+      key: "conflicts",
+      label: messages.filterConflicts(state.counts.conflicts),
+      value: state.counts.conflicts,
+      note: state.counts.conflicts > 0 ? messages.reviewEyebrow : messages.inSync
+    },
+    {
+      key: "pending",
+      label: messages.filterPendingDelete(state.counts["pending-delete"]),
+      value: state.counts["pending-delete"],
+      note:
+        state.counts["pending-delete"] > 0 ? messages.pendingDelete : messages.reviewReady
+    }
+  ];
 
   return (
     <div className="window-shell">
       <main className="window-content main-window">
         <header className="app-toolbar">
-          <div className="toolbar-copy">
-            <p className="toolbar-kicker">{messages.appName}</p>
-            <h1>{messages.skillsSectionTitle}</h1>
-            <p className="toolbar-subtitle">{messages.appSubtitle}</p>
-          </div>
+          <section className="hero-panel">
+            <div className="toolbar-top-row">
+              <AppBrand
+                kicker={messages.appName}
+                title={messages.skillsSectionTitle}
+                subtitle={messages.appSubtitle}
+              />
+            </div>
 
-          <div className="toolbar-stack">
+            <div className="hero-metrics">
+              {heroMetrics.map((metric) => (
+                <article key={metric.key} className={`hero-metric hero-metric-${metric.key}`}>
+                  <span>{metric.label}</span>
+                  <strong>{metric.value}</strong>
+                  <p>{metric.note}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <div className="toolbar-side">
+            <div className="toolbar-utility-row">
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={messages.openSettings}
+                title={messages.openSettings}
+                onClick={() => void openAppWindow("settings")}
+              >
+                <SettingsIcon />
+              </button>
+            </div>
+
             <section className="github-card">
               <div className="github-card-head">
                 <div>
@@ -186,12 +251,6 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
               </button>
               <button
                 className="secondary-button"
-                onClick={() => void openAppWindow("settings")}
-              >
-                {messages.openSettings}
-              </button>
-              <button
-                className="secondary-button"
                 onClick={state.refresh}
                 disabled={state.refreshing}
               >
@@ -207,25 +266,6 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
             </div>
           </div>
         </header>
-
-        <section className="summary-strip">
-          <div className="summary-card">
-            <span>{messages.selectedCount(state.selectedCount)}</span>
-            <strong>{state.allRows.length}</strong>
-          </div>
-          <div className="summary-card">
-            <span>{messages.filterChanged(state.counts.changed)}</span>
-            <strong>{state.counts.changed}</strong>
-          </div>
-          <div className="summary-card">
-            <span>{messages.filterConflicts(state.counts.conflicts)}</span>
-            <strong>{state.counts.conflicts}</strong>
-          </div>
-          <div className="summary-card">
-            <span>{messages.filterPendingDelete(state.counts["pending-delete"])}</span>
-            <strong>{state.counts["pending-delete"]}</strong>
-          </div>
-        </section>
 
         <section className="content-split">
           <section className="pane skill-pane">
