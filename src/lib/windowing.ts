@@ -74,11 +74,7 @@ export async function openAppWindow(view: Exclude<WindowView, "main">) {
       minWidth: descriptor.minWidth,
       minHeight: descriptor.minHeight,
       resizable: true,
-      visible: true
-    });
-
-    created.once("tauri://created", async () => {
-      await created.setFocus();
+      visible: false
     });
 
     created.once("tauri://error", (error) => {
@@ -97,4 +93,15 @@ export async function closeCurrentAppWindow() {
 
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   await getCurrentWindow().close();
+}
+
+export async function revealCurrentAppWindow() {
+  if (!isTauriRuntime()) {
+    return;
+  }
+
+  const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+  const current = getCurrentWebviewWindow();
+  await current.show();
+  await current.setFocus();
 }

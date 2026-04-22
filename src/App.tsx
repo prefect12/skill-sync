@@ -1,8 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { MainSyncWindow } from "./components/MainSyncWindow";
 import { RootsWindow } from "./components/RootsWindow";
 import { SettingsWindow } from "./components/SettingsWindow";
-import { getWindowView } from "./lib/windowing";
+import { getWindowView, revealCurrentAppWindow } from "./lib/windowing";
 import { usePreferencesState } from "./state/usePreferencesState";
 
 function resolveTheme(appearance: "system" | "light" | "dark") {
@@ -17,6 +17,10 @@ export default function App() {
     usePreferencesState();
   const view = getWindowView();
 
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = resolveTheme(preferences.appearance);
+  }, [preferences.appearance]);
+
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -30,6 +34,10 @@ export default function App() {
       media.removeEventListener("change", applyTheme);
     };
   }, [preferences.appearance]);
+
+  useEffect(() => {
+    void revealCurrentAppWindow();
+  }, []);
 
   if (view === "roots") {
     return <RootsWindow language={preferences.language} />;
