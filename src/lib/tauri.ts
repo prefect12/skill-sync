@@ -6,6 +6,7 @@ import type {
   GitHubStatus,
   LocalRootSnapshot,
   RemoteScanPayload,
+  SkillDiffPayload,
   SkillRootConfig,
   SyncOperation,
   SyncResult
@@ -56,6 +57,20 @@ export async function syncSelectedItems(
     repoUrl,
     roots,
     operations
+  });
+}
+
+export async function loadSkillDiff(
+  repoUrl: string,
+  roots: SkillRootConfig[],
+  rootId: string,
+  skillName: string
+) {
+  return safeInvoke<SkillDiffPayload>("load_skill_diff", {
+    repoUrl,
+    roots,
+    rootId,
+    skillName
   });
 }
 

@@ -1,6 +1,7 @@
 import type {
   AppearanceMode,
   Language,
+  SkillDiffChange,
   SyncOperationType,
   SyncState
 } from "./types";
@@ -131,6 +132,15 @@ type Messages = {
   reviewConfirmBusy: string;
   rootEmpty: string;
   skippedReviewedNote: (count: number) => string;
+  compareTitle: string;
+  changedFilesTitle: string;
+  compareLoading: string;
+  compareUnavailable: string;
+  compareNoFiles: string;
+  compareNoText: string;
+  compareRemoteLabel: string;
+  compareLocalLabel: string;
+  binaryFilePreviewUnavailable: string;
 };
 
 const messages: Record<Language, Messages> = {
@@ -272,7 +282,16 @@ const messages: Record<Language, Messages> = {
     reviewConfirm: "Sync reviewed items",
     reviewConfirmBusy: "Syncing…",
     rootEmpty: "No skills found in this root yet.",
-    skippedReviewedNote: (count) => `Skipped ${count} reviewed item(s).`
+    skippedReviewedNote: (count) => `Skipped ${count} reviewed item(s).`,
+    compareTitle: "Compare",
+    changedFilesTitle: "Changed files",
+    compareLoading: "Loading compare…",
+    compareUnavailable: "Compare unavailable.",
+    compareNoFiles: "No changed files are available for preview.",
+    compareNoText: "No textual diff is available for this file.",
+    compareRemoteLabel: "Remote",
+    compareLocalLabel: "Local",
+    binaryFilePreviewUnavailable: "Binary file cannot be previewed."
   },
   "zh-CN": {
     appName: "SkillSync",
@@ -404,7 +423,16 @@ const messages: Record<Language, Messages> = {
     reviewConfirm: "同步已审核条目",
     reviewConfirmBusy: "同步中…",
     rootEmpty: "这个目录里暂时还没有发现 skill。",
-    skippedReviewedNote: (count) => `跳过了 ${count} 个已审核条目。`
+    skippedReviewedNote: (count) => `跳过了 ${count} 个已审核条目。`,
+    compareTitle: "对比",
+    changedFilesTitle: "变更文件",
+    compareLoading: "正在加载对比…",
+    compareUnavailable: "暂时无法显示对比。",
+    compareNoFiles: "当前没有可预览的变更文件。",
+    compareNoText: "这个文件没有可显示的文本 diff。",
+    compareRemoteLabel: "远端",
+    compareLocalLabel: "本地",
+    binaryFilePreviewUnavailable: "二进制文件暂不支持预览。"
   }
 };
 
@@ -456,6 +484,31 @@ export function formatActionLabel(language: Language, action: SyncOperationType)
   };
 
   return labels[language]?.[action] ?? labels.en[action];
+}
+
+export function formatDiffChangeLabel(
+  language: Language,
+  change: SkillDiffChange,
+  isBinary = false
+) {
+  if (isBinary) {
+    return language === "zh-CN" ? "二进制" : "Binary";
+  }
+
+  const labels: Record<Language, Record<SkillDiffChange, string>> = {
+    en: {
+      modified: "Modified",
+      added: "Added",
+      removed: "Removed"
+    },
+    "zh-CN": {
+      modified: "已修改",
+      added: "已新增",
+      removed: "已删除"
+    }
+  };
+
+  return labels[language]?.[change] ?? labels.en[change];
 }
 
 export function formatAppearanceLabel(language: Language, appearance: AppearanceMode) {

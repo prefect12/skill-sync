@@ -2,6 +2,8 @@ import type {
   DiscoverRootsPayload,
   LocalRootSnapshot,
   RemoteScanPayload,
+  SkillDiffPayload,
+  SkillRow,
   SkillRootConfig,
   SyncOperation,
   SyncResult
@@ -96,4 +98,47 @@ export function fallbackSyncResult(operations: SyncOperation[]): SyncResult {
     ],
     syncedRowIds: operations.map((operation) => operation.rowId)
   };
+}
+
+export function fallbackSkillDiff(row: SkillRow): SkillDiffPayload {
+  const modified = {
+    path: "SKILL.md",
+    change: "modified" as const,
+    isBinary: false,
+    remoteText: `# ${row.name}\n\n## Purpose\nRemote version summary.\n\n## Usage\n- Run the remote workflow first.\n`,
+    localText: `# ${row.name}\n\n## Purpose\nLocal version summary with newer details.\n\n## Usage\n- Run the local workflow first.\n- Review compare output before syncing.\n`
+  };
+  const added = {
+    path: "examples/quickstart.md",
+    change: "added" as const,
+    isBinary: false,
+    remoteText: "",
+    localText: "## Quickstart\n\n1. Install the skill.\n2. Refresh SkillSync.\n"
+  };
+  const removed = {
+    path: "notes/deprecated.md",
+    change: "removed" as const,
+    isBinary: false,
+    remoteText: "Deprecated workflow notes.\n",
+    localText: ""
+  };
+  const binary = {
+    path: "assets/reference.bin",
+    change: "modified" as const,
+    isBinary: true
+  };
+
+  if (row.state === "only-local" || row.state === "local-changed") {
+    return { files: [modified, added, binary] };
+  }
+
+  if (row.state === "only-remote" || row.state === "remote-changed") {
+    return { files: [modified, removed, binary] };
+  }
+
+  if (row.state === "pending-delete") {
+    return { files: [removed, binary] };
+  }
+
+  return { files: [modified, added, removed, binary] };
 }

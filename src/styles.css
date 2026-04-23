@@ -736,6 +736,155 @@ h3 {
   line-height: 1.45;
 }
 
+.compare-layout,
+.compare-files,
+.compare-viewer,
+.compare-file-copy,
+.compare-empty-state {
+  display: grid;
+  gap: 12px;
+}
+
+.compare-subtitle {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.compare-file-list {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.compare-file-row {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid transparent;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.compare-file-row:hover {
+  background: var(--panel-muted);
+}
+
+.compare-file-row.active {
+  background: var(--selection);
+  border-color: rgba(114, 153, 223, 0.28);
+}
+
+.compare-file-copy strong,
+.compare-file-header strong {
+  font-size: 13px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.compare-file-copy p,
+.compare-file-header p,
+.compare-empty-state p {
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.compare-file-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.compare-diff-scroll {
+  overflow: auto;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.compare-hunk + .compare-hunk {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.compare-hunk-header {
+  padding: 10px 12px;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
+  background: rgba(255, 255, 255, 0.03);
+  white-space: pre;
+}
+
+.compare-line {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: stretch;
+  min-width: max-content;
+  font-size: 12px;
+  font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
+  white-space: pre;
+}
+
+.compare-line-prefix,
+.compare-line-content {
+  padding: 4px 10px;
+}
+
+.compare-line-prefix {
+  border-right: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.compare-line-content {
+  overflow: visible;
+}
+
+.compare-line-added {
+  background: rgba(47, 158, 68, 0.12);
+}
+
+.compare-line-removed {
+  background: rgba(208, 68, 55, 0.12);
+}
+
+.compare-line-meta {
+  background: rgba(127, 140, 160, 0.08);
+  color: var(--text-soft);
+}
+
+.compare-pill {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.compare-pill-modified {
+  background: rgba(10, 132, 255, 0.13);
+  color: var(--accent-strong);
+}
+
+.compare-pill-added {
+  background: rgba(47, 158, 68, 0.13);
+  color: var(--success);
+}
+
+.compare-pill-removed,
+.compare-pill-binary {
+  background: rgba(183, 121, 31, 0.14);
+  color: var(--warning);
+}
+
+.compare-empty-state {
+  padding: 4px 0;
+}
+
 .root-row-meta {
   color: var(--text-soft);
   font-size: 13px;

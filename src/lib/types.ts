@@ -105,6 +105,20 @@ export interface RemoteScanPayload {
   notes: string[];
 }
 
+export type SkillDiffChange = "modified" | "added" | "removed";
+
+export interface SkillDiffFile {
+  path: string;
+  change: SkillDiffChange;
+  isBinary: boolean;
+  localText?: string;
+  remoteText?: string;
+}
+
+export interface SkillDiffPayload {
+  files: SkillDiffFile[];
+}
+
 export interface SyncOperation {
   rowId: string;
   rootId: string;
