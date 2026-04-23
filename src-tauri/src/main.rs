@@ -9,6 +9,9 @@ use std::io;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::process::Stdio;
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, SubmenuBuilder};
 use tauri::Emitter;
@@ -209,6 +212,9 @@ const GIT_ENV: [(&str, &str); 2] = [
     ("GIT_TERMINAL_PROMPT", "0"),
     ("GCM_INTERACTIVE", "Never"),
 ];
+const GH_TIMEOUT: Duration = Duration::from_secs(8);
+const GIT_TIMEOUT: Duration = Duration::from_secs(20);
+const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(45);
 
 impl CommandError {
     fn into_message(self) -> String {
@@ -616,6 +622,7 @@ fn run_command_with_env(
     repo_dir: Option<&Path>,
     args: &[&str],
     envs: &[(&str, &str)],
+    timeout: Duration,
 ) -> Result<CommandResponse, CommandError> {
     let resolved_binary = resolve_command_binary(binary);
     let mut command = Command::new(&resolved_binary);
@@ -623,12 +630,15 @@ fn run_command_with_env(
         command.arg("-C").arg(repo_dir);
     }
     command.args(args);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
     for (key, value) in envs {
         command.env(key, value);
     }
 
-    let output = command
-        .output()
+    let mut child = command
+        .spawn()
         .map_err(|error| match error.kind() {
             ErrorKind::NotFound => {
                 CommandError::NotFound(format!("{binary} is not installed or not on PATH."))
@@ -638,6 +648,40 @@ fn run_command_with_env(
                 args
             )),
         })?;
+
+    let started_at = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if started_at.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(CommandError::Failed(format!(
+                        "{binary} timed out after {}s while running {:?}",
+                        timeout.as_secs(),
+                        args
+                    )));
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(CommandError::Failed(format!(
+                    "Failed while waiting for {binary} ({resolved_binary}) {:?}: {error}",
+                    args
+                )));
+            }
+        }
+    }
+
+    let output = child.wait_with_output().map_err(|error| {
+        CommandError::Failed(format!(
+            "Failed to capture output from {binary} ({resolved_binary}) {:?}: {error}",
+            args
+        ))
+    })?;
 
     Ok(CommandResponse {
         success: output.status.success(),
@@ -651,8 +695,9 @@ fn run_command_checked_with_env(
     repo_dir: Option<&Path>,
     args: &[&str],
     envs: &[(&str, &str)],
+    timeout: Duration,
 ) -> Result<String, String> {
-    let response = run_command_with_env(binary, repo_dir, args, envs)
+    let response = run_command_with_env(binary, repo_dir, args, envs, timeout)
         .map_err(CommandError::into_message)?;
 
     if !response.success {
@@ -667,11 +712,15 @@ fn run_command_checked_with_env(
 }
 
 fn run_git(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
-    run_command_checked_with_env("git", repo_dir, args, &GIT_ENV)
+    run_command_checked_with_env("git", repo_dir, args, &GIT_ENV, GIT_TIMEOUT)
+}
+
+fn run_git_network(repo_dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
+    run_command_checked_with_env("git", repo_dir, args, &GIT_ENV, GIT_NETWORK_TIMEOUT)
 }
 
 fn run_gh(args: &[&str]) -> Result<String, String> {
-    run_command_checked_with_env("gh", None, args, &GH_ENV)
+    run_command_checked_with_env("gh", None, args, &GH_ENV, GH_TIMEOUT)
 }
 
 fn run_gh_auth_status() -> Result<CommandResponse, CommandError> {
@@ -680,6 +729,7 @@ fn run_gh_auth_status() -> Result<CommandResponse, CommandError> {
         None,
         &["auth", "status", "--active", "--hostname", GITHUB_HOST],
         &GH_ENV,
+        GH_TIMEOUT,
     )
 }
 
@@ -766,6 +816,24 @@ fn clone_repo_with_fallback(repo_dir: &Path, repo_url: &str) -> Result<(), Strin
             ],
         ) {
             Ok(_) => return Ok(()),
+            Err(error) if !error.contains("timed out") => {
+                let _ = remove_path_if_exists(repo_dir);
+                failures.push(format!("{candidate}: {error}"));
+            }
+            Err(_) => {}
+        }
+
+        match run_git_network(
+            None,
+            &[
+                "clone",
+                &candidate,
+                repo_dir
+                    .to_str()
+                    .ok_or_else(|| "Invalid clone path".to_string())?,
+            ],
+        ) {
+            Ok(_) => return Ok(()),
             Err(error) => {
                 let _ = remove_path_if_exists(repo_dir);
                 failures.push(format!("{candidate}: {error}"));
@@ -798,7 +866,7 @@ fn refresh_repo_with_fallback(repo_dir: &Path, repo_url: &str) -> Result<(), Str
     for candidate in candidates {
         run_git(Some(repo_dir), &["remote", "set-url", "origin", &candidate])?;
 
-        match run_git(Some(repo_dir), &["pull", "--ff-only"]) {
+        match run_git_network(Some(repo_dir), &["pull", "--ff-only"]) {
             Ok(_) => return Ok(()),
             Err(error) => failures.push(format!("{candidate}: {error}")),
         }
@@ -830,21 +898,8 @@ fn ensure_repo_clone(repo_url: &str) -> Result<PathBuf, String> {
     Ok(repo_dir)
 }
 
-fn remote_skill_entry(repo_dir: &Path, root_id: &str, remote_path: &str, skill_name: &str, skill_dir: &Path) -> RemoteSkillEntry {
+fn remote_skill_entry(root_id: &str, remote_path: &str, skill_name: &str, skill_dir: &Path) -> RemoteSkillEntry {
     let repo_relative_path = format!("{remote_path}/{skill_name}");
-    let commit_time = run_git(
-        Some(repo_dir),
-        &["log", "-1", "--format=%ct", "--", &repo_relative_path],
-    )
-    .ok()
-    .and_then(|value| value.parse::<u64>().ok())
-    .map(|seconds| seconds * 1000)
-    .unwrap_or_else(|| latest_modified_ms(skill_dir));
-    let commit_summary = run_git(
-        Some(repo_dir),
-        &["log", "-1", "--format=%h %s", "--", &repo_relative_path],
-    )
-    .ok();
     let content_hash = hash_directory(skill_dir).unwrap_or_else(|_| "unavailable".into());
 
     RemoteSkillEntry {
@@ -852,9 +907,9 @@ fn remote_skill_entry(repo_dir: &Path, root_id: &str, remote_path: &str, skill_n
         root_id: root_id.to_string(),
         name: skill_name.to_string(),
         repo_path: repo_relative_path,
-        modified_at_ms: commit_time,
+        modified_at_ms: latest_modified_ms(skill_dir),
         content_hash,
-        last_commit_summary: commit_summary,
+        last_commit_summary: None,
     }
 }
 
@@ -875,7 +930,6 @@ fn scan_remote_root(repo_dir: &Path, config: &SkillRootConfig) -> Result<RemoteR
             continue;
         };
         skills.push(remote_skill_entry(
-            repo_dir,
             &config.id,
             &remote_path,
             &name,
