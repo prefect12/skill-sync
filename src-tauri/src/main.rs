@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -84,6 +85,22 @@ struct DiscoverRootsPayload {
 struct RemoteScanPayload {
     roots: Vec<RemoteRootSnapshot>,
     notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillDiffFilePayload {
+    path: String,
+    change: String,
+    is_binary: bool,
+    local_text: Option<String>,
+    remote_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillDiffPayload {
+    files: Vec<SkillDiffFilePayload>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,6 +268,39 @@ fn normalize_remote_path(input: &str) -> Result<String, String> {
     }
 
     Ok(trimmed.replace('\\', "/"))
+}
+
+fn normalize_skill_name(input: &str) -> Result<String, String> {
+    if Path::new(input.trim()).is_absolute() {
+        return Err(format!("Skill name must be relative: {input}"));
+    }
+
+    let trimmed = input.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        return Err("Skill name must not be empty".to_string());
+    }
+
+    let path = Path::new(trimmed);
+    let mut parts = vec![];
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(value) => {
+                let part = value.to_string_lossy().trim().to_string();
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+            }
+            _ => {
+                return Err(format!("Skill name contains invalid traversal: {input}"));
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        return Err(format!("Skill name must not be empty: {input}"));
+    }
+
+    Ok(parts.join("/"))
 }
 
 fn workspace_path_for_home(home: &Path, repo_url: &str) -> PathBuf {
@@ -577,6 +627,26 @@ fn skill_sync_workspace(repo_url: &str) -> Result<PathBuf, String> {
     fs::create_dir_all(&path)
         .map_err(|error| format!("Failed to create workspace {}: {error}", path.display()))?;
     Ok(path)
+}
+
+fn existing_repo_clone_path_for_home(home: &Path, repo_url: &str) -> Result<Option<PathBuf>, String> {
+    if repo_url.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let repo_dir = workspace_path_for_home(home, repo_url).join("repo");
+    if repo_dir.join(".git").exists() {
+        return Ok(Some(repo_dir));
+    }
+
+    Err(format!(
+        "Remote snapshot is not available yet for {}. Refresh the app before opening compare.",
+        repo_url.trim()
+    ))
+}
+
+fn existing_repo_clone_path(repo_url: &str) -> Result<Option<PathBuf>, String> {
+    existing_repo_clone_path_for_home(&home_dir()?, repo_url)
 }
 
 fn fallback_binary_locations(binary: &str) -> &'static [&'static str] {
@@ -963,11 +1033,13 @@ fn find_root<'a>(roots: &'a [SkillRootConfig], root_id: &str) -> Result<&'a Skil
 }
 
 fn skill_source_path(root: &SkillRootConfig, skill_name: &str) -> Result<PathBuf, String> {
-    Ok(expand_home(&root.local_path)?.join(skill_name))
+    Ok(expand_home(&root.local_path)?.join(normalize_skill_name(skill_name)?))
 }
 
 fn skill_remote_path(repo_dir: &Path, root: &SkillRootConfig, skill_name: &str) -> Result<PathBuf, String> {
-    Ok(repo_dir.join(normalize_remote_path(&root.remote_path)?).join(skill_name))
+    Ok(repo_dir
+        .join(normalize_remote_path(&root.remote_path)?)
+        .join(normalize_skill_name(skill_name)?))
 }
 
 fn local_write_path(path: &Path) -> Result<PathBuf, String> {
@@ -979,6 +1051,145 @@ fn local_write_path(path: &Path) -> Result<PathBuf, String> {
     }
 
     Ok(path.to_path_buf())
+}
+
+fn collect_file_entries(base: &Path) -> Result<BTreeMap<String, PathBuf>, String> {
+    fn walk(
+        base_virtual: &Path,
+        virtual_current: &Path,
+        actual_current: &Path,
+        files: &mut BTreeMap<String, PathBuf>,
+        active_dirs: &mut HashSet<PathBuf>,
+    ) -> Result<(), String> {
+        let canonical_current = fs::canonicalize(actual_current)
+            .unwrap_or_else(|_| actual_current.to_path_buf());
+        if !active_dirs.insert(canonical_current.clone()) {
+            return Ok(());
+        }
+
+        let mut entries = fs::read_dir(actual_current)
+            .map_err(|error| format!("Failed to read {}: {error}", actual_current.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to access {}: {error}", actual_current.display()))?;
+        entries.sort_by_key(|entry| entry.file_name());
+
+        for entry in entries {
+            let virtual_path = virtual_current.join(entry.file_name());
+            let entry_path = entry.path();
+            let metadata = fs::symlink_metadata(&entry_path)
+                .map_err(|error| format!("Failed to stat {}: {error}", entry_path.display()))?;
+            let resolved_path = if metadata.file_type().is_symlink() {
+                fs::canonicalize(&entry_path).map_err(|error| {
+                    format!("Failed to resolve symlink {}: {error}", entry_path.display())
+                })?
+            } else {
+                entry_path.clone()
+            };
+            let resolved_metadata = fs::metadata(&resolved_path)
+                .map_err(|error| format!("Failed to read {}: {error}", resolved_path.display()))?;
+
+            if resolved_metadata.is_dir() {
+                walk(
+                    base_virtual,
+                    &virtual_path,
+                    &resolved_path,
+                    files,
+                    active_dirs,
+                )?;
+                continue;
+            }
+
+            if !resolved_metadata.is_file() {
+                continue;
+            }
+
+            let relative = virtual_path
+                .strip_prefix(base_virtual)
+                .unwrap_or(&virtual_path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            files.insert(relative, resolved_path);
+        }
+
+        active_dirs.remove(&canonical_current);
+        Ok(())
+    }
+
+    let mut files = BTreeMap::new();
+    let mut active_dirs = HashSet::new();
+    walk(base, base, base, &mut files, &mut active_dirs)?;
+    Ok(files)
+}
+
+fn decode_text(bytes: &[u8]) -> Option<String> {
+    if bytes.contains(&0) {
+        return None;
+    }
+
+    String::from_utf8(bytes.to_vec()).ok()
+}
+
+fn load_skill_diff_payload(
+    local_dir: Option<&Path>,
+    remote_dir: Option<&Path>,
+) -> Result<SkillDiffPayload, String> {
+    let local_files = match local_dir {
+        Some(path) if path.exists() => collect_file_entries(path)?,
+        _ => BTreeMap::new(),
+    };
+    let remote_files = match remote_dir {
+        Some(path) if path.exists() => collect_file_entries(path)?,
+        _ => BTreeMap::new(),
+    };
+
+    let mut all_paths = BTreeSet::new();
+    all_paths.extend(local_files.keys().cloned());
+    all_paths.extend(remote_files.keys().cloned());
+
+    let mut files = vec![];
+    for path in all_paths {
+        let local_bytes = local_files
+            .get(&path)
+            .map(|file_path| {
+                fs::read(file_path)
+                    .map_err(|error| format!("Failed to read {}: {error}", file_path.display()))
+            })
+            .transpose()?;
+        let remote_bytes = remote_files
+            .get(&path)
+            .map(|file_path| {
+                fs::read(file_path)
+                    .map_err(|error| format!("Failed to read {}: {error}", file_path.display()))
+            })
+            .transpose()?;
+
+        if let (Some(local), Some(remote)) = (&local_bytes, &remote_bytes) {
+            if local == remote {
+                continue;
+            }
+        }
+
+        let local_text = local_bytes.as_deref().and_then(decode_text);
+        let remote_text = remote_bytes.as_deref().and_then(decode_text);
+        let is_binary =
+            (local_bytes.is_some() && local_text.is_none()) || (remote_bytes.is_some() && remote_text.is_none());
+        let change = match (local_bytes.is_some(), remote_bytes.is_some()) {
+            (true, true) => "modified",
+            (true, false) => "added",
+            (false, true) => "removed",
+            (false, false) => continue,
+        };
+
+        files.push(SkillDiffFilePayload {
+            path,
+            change: change.to_string(),
+            is_binary,
+            local_text: if is_binary { None } else { local_text },
+            remote_text: if is_binary { None } else { remote_text },
+        });
+    }
+
+    Ok(SkillDiffPayload { files })
 }
 
 fn write_manifest(repo_dir: &Path, roots: &[SkillRootConfig]) -> Result<(), String> {
@@ -1214,6 +1425,32 @@ fn load_remote_snapshot(
 }
 
 #[tauri::command]
+fn load_skill_diff(
+    repo_url: String,
+    roots: Vec<SkillRootConfig>,
+    root_id: String,
+    skill_name: String,
+) -> Result<SkillDiffPayload, String> {
+    let root = find_root(&roots, &root_id)?;
+    let local_skill_dir = skill_source_path(root, &skill_name)?;
+    let local_dir = if local_skill_dir.exists() {
+        Some(local_write_path(&local_skill_dir)?)
+    } else {
+        None
+    };
+
+    let remote_dir = existing_repo_clone_path(&repo_url)?
+        .map(|repo_dir| skill_remote_path(&repo_dir, root, &skill_name))
+        .transpose()?;
+    let remote_dir = match remote_dir {
+        Some(path) if path.exists() => Some(path),
+        _ => None,
+    };
+
+    load_skill_diff_payload(local_dir.as_deref(), remote_dir.as_deref())
+}
+
+#[tauri::command]
 fn sync_selected_items(
     repo_url: String,
     roots: Vec<SkillRootConfig>,
@@ -1407,6 +1644,7 @@ fn main() -> io::Result<()> {
             discover_roots,
             scan_local_roots,
             load_remote_snapshot,
+            load_skill_diff,
             sync_selected_items
         ])
         .run(tauri::generate_context!())
@@ -1416,6 +1654,7 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::symlink;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn create_test_dir(prefix: &str) -> PathBuf {
@@ -1602,5 +1841,160 @@ mod tests {
         assert_eq!(snapshot.skills[0].name, "codex-primary-runtime/spreadsheets");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn normalize_skill_name_rejects_traversal() {
+        assert!(normalize_skill_name("../escape").is_err());
+        assert!(normalize_skill_name("/absolute").is_err());
+        assert_eq!(
+            normalize_skill_name("nested/skill").unwrap(),
+            "nested/skill"
+        );
+    }
+
+    #[test]
+    fn load_skill_diff_payload_marks_modified_text_files() {
+        let local = create_test_dir("diff-local");
+        let remote = create_test_dir("diff-remote");
+
+        fs::write(local.join("SKILL.md"), "# local\n").unwrap();
+        fs::write(remote.join("SKILL.md"), "# remote\n").unwrap();
+
+        let payload = load_skill_diff_payload(Some(&local), Some(&remote)).unwrap();
+
+        assert_eq!(payload.files.len(), 1);
+        assert_eq!(payload.files[0].path, "SKILL.md");
+        assert_eq!(payload.files[0].change, "modified");
+        assert_eq!(payload.files[0].local_text.as_deref(), Some("# local\n"));
+        assert_eq!(payload.files[0].remote_text.as_deref(), Some("# remote\n"));
+
+        let _ = fs::remove_dir_all(&local);
+        let _ = fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn load_skill_diff_payload_marks_added_and_removed_files() {
+        let local = create_test_dir("diff-added");
+        let remote = create_test_dir("diff-removed");
+
+        fs::write(local.join("SKILL.md"), "# local\n").unwrap();
+        fs::write(remote.join("README.md"), "# remote only\n").unwrap();
+
+        let payload = load_skill_diff_payload(Some(&local), Some(&remote)).unwrap();
+        let changes = payload
+            .files
+            .iter()
+            .map(|file| (file.path.clone(), file.change.clone()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            changes,
+            vec![
+                ("README.md".to_string(), "removed".to_string()),
+                ("SKILL.md".to_string(), "added".to_string())
+            ]
+        );
+
+        let _ = fs::remove_dir_all(&local);
+        let _ = fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn load_skill_diff_payload_collects_nested_files_in_sorted_order() {
+        let local = create_test_dir("diff-nested-local");
+        let remote = create_test_dir("diff-nested-remote");
+
+        fs::create_dir_all(local.join("docs")).unwrap();
+        fs::create_dir_all(remote.join("assets")).unwrap();
+        fs::write(local.join("docs/guide.md"), "local guide").unwrap();
+        fs::write(remote.join("assets/data.md"), "remote data").unwrap();
+
+        let payload = load_skill_diff_payload(Some(&local), Some(&remote)).unwrap();
+        let paths = payload
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(paths, vec!["assets/data.md", "docs/guide.md"]);
+
+        let _ = fs::remove_dir_all(&local);
+        let _ = fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn load_skill_diff_payload_marks_binary_files() {
+        let local = create_test_dir("diff-binary-local");
+        let remote = create_test_dir("diff-binary-remote");
+
+        fs::write(local.join("blob.bin"), vec![0, 1, 2, 3]).unwrap();
+        fs::write(remote.join("blob.bin"), vec![0, 9, 2, 3]).unwrap();
+
+        let payload = load_skill_diff_payload(Some(&local), Some(&remote)).unwrap();
+
+        assert_eq!(payload.files[0].path, "blob.bin");
+        assert!(payload.files[0].is_binary);
+        assert!(payload.files[0].local_text.is_none());
+        assert!(payload.files[0].remote_text.is_none());
+
+        let _ = fs::remove_dir_all(&local);
+        let _ = fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn load_skill_diff_payload_marks_non_utf8_files_as_binary() {
+        let local = create_test_dir("diff-non-utf8-local");
+        let remote = create_test_dir("diff-non-utf8-remote");
+
+        fs::write(local.join("blob.txt"), vec![0xF0, 0x28, 0x8C, 0x28]).unwrap();
+        fs::write(remote.join("blob.txt"), b"plain text").unwrap();
+
+        let payload = load_skill_diff_payload(Some(&local), Some(&remote)).unwrap();
+
+        assert!(payload.files[0].is_binary);
+
+        let _ = fs::remove_dir_all(&local);
+        let _ = fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn load_skill_diff_payload_reads_resolved_symlink_directories() {
+        let real_local = create_test_dir("diff-real-local");
+        let link_parent = create_test_dir("diff-link-parent");
+        let linked_local = link_parent.join("alpha");
+        let remote = create_test_dir("diff-symlink-remote");
+
+        fs::write(real_local.join("SKILL.md"), "# local via symlink\n").unwrap();
+        fs::write(remote.join("SKILL.md"), "# remote\n").unwrap();
+        symlink(&real_local, &linked_local).unwrap();
+
+        let resolved_local = local_write_path(&linked_local).unwrap();
+        let payload = load_skill_diff_payload(Some(&resolved_local), Some(&remote)).unwrap();
+
+        assert_eq!(payload.files.len(), 1);
+        assert_eq!(payload.files[0].path, "SKILL.md");
+        assert_eq!(
+            payload.files[0].local_text.as_deref(),
+            Some("# local via symlink\n")
+        );
+
+        let _ = fs::remove_dir_all(&real_local);
+        let _ = fs::remove_dir_all(&link_parent);
+        let _ = fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn existing_repo_clone_path_for_home_requires_existing_repo() {
+        let home = create_test_dir("missing-managed-clone");
+        let result = existing_repo_clone_path_for_home(&home, "https://github.com/acme/skills");
+
+        assert!(result.is_err());
+        assert!(result
+            .err()
+            .unwrap()
+            .contains("Remote snapshot is not available yet"));
+
+        let _ = fs::remove_dir_all(&home);
     }
 }

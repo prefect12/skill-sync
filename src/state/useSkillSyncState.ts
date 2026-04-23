@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { fallbackLocalSnapshots, fallbackRemoteSnapshot, fallbackRoots } from "../lib/fallback";
+import {
+  fallbackLocalSnapshots,
+  fallbackRemoteSnapshot,
+  fallbackRoots,
+  fallbackSkillDiff
+} from "../lib/fallback";
+import {
+  buildSkillDiffCacheKey,
+  pickInitialDiffFilePath,
+  shouldShowCompare,
+  type CompareLoadState
+} from "../lib/compare";
 import {
   canWriteToRepository,
   findGitHubRepository,
@@ -33,6 +44,7 @@ import {
   loadGitHubRepositories,
   loadGitHubStatus,
   loadRemoteSnapshot,
+  loadSkillDiff,
   PREVIEW_RUNTIME_ERROR,
   scanLocalRoots,
   syncSelectedItems,
@@ -47,6 +59,7 @@ import type {
   GitHubStatus,
   LocalRootSnapshot,
   RemoteRootSnapshot,
+  SkillDiffPayload,
   SkillListRow,
   SkillRootConfig,
   SyncOperation,
@@ -121,9 +134,20 @@ export function useSkillSyncState(preferences: AppPreferences) {
   const [repositoryLoadError, setRepositoryLoadError] = useState("");
   const [repoValidation, setRepoValidation] = useState<GitHubRepositoryValidation | null>(null);
   const [repoUrlError, setRepoUrlError] = useState("");
+  const [diffCache, setDiffCache] = useState<Record<string, SkillDiffPayload>>({});
+  const [diffStateByKey, setDiffStateByKey] = useState<Record<string, CompareLoadState>>({});
+  const [diffErrorByKey, setDiffErrorByKey] = useState<Record<string, string>>({});
+  const [selectedDiffFilePath, setSelectedDiffFilePath] = useState("");
   const [refreshing, startRefresh] = useTransition();
   const [syncing, startSync] = useTransition();
   const [loadingRepositories, startRepositoryLoad] = useTransition();
+
+  function clearCompareState() {
+    setDiffCache({});
+    setDiffStateByKey({});
+    setDiffErrorByKey({});
+    setSelectedDiffFilePath("");
+  }
 
   async function loadGitHubContext(localRepoUrl: string, ownerOverride?: string) {
     let nextStatus = FALLBACK_GITHUB_STATUS;
@@ -216,6 +240,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
       overrideRoots || overrideRepoUrl !== undefined || ownerOverride ? "Reload" : "Startup"
     );
     const localRepoUrl = overrideRepoUrl ?? repoUrl;
+    clearCompareState();
     const customRoots = readRootConfigs();
     const builtInOverrides = readBuiltInRootOverrides();
     let discovered = fallbackRoots();
@@ -286,6 +311,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
     };
   }
 
+  // Keep the in-flight request alive across the "idle" -> "loading" state flip.
   useEffect(() => {
     void loadAll(undefined, readRepoUrl());
   }, []);
@@ -336,6 +362,109 @@ export function useSkillSyncState(preferences: AppPreferences) {
     filteredRows.find((item) => item.row.id === selectedRowId) ??
     allRows.find((item) => item.row.id === selectedRowId) ??
     null;
+  const selectedCompareKey =
+    selectedItem && shouldShowCompare(selectedItem.row)
+      ? buildSkillDiffCacheKey(selectedItem.row)
+      : "";
+  const selectedCompare =
+    selectedCompareKey ? diffCache[selectedCompareKey] ?? null : null;
+  const selectedCompareState =
+    selectedCompareKey ? diffStateByKey[selectedCompareKey] ?? "idle" : "idle";
+  const selectedCompareError =
+    selectedCompareKey ? diffErrorByKey[selectedCompareKey] ?? "" : "";
+
+  useEffect(() => {
+    setSelectedDiffFilePath("");
+  }, [selectedCompareKey]);
+
+  useEffect(() => {
+    if (!selectedCompare?.files.length) {
+      return;
+    }
+
+    setSelectedDiffFilePath((current) =>
+      current && selectedCompare.files.some((file) => file.path === current)
+        ? current
+        : pickInitialDiffFilePath(selectedCompare.files)
+    );
+  }, [selectedCompare]);
+
+  useEffect(() => {
+    if (!selectedItem || !selectedCompareKey || !shouldShowCompare(selectedItem.row)) {
+      return;
+    }
+
+    if (selectedCompareState === "loading" || selectedCompareState === "ready") {
+      return;
+    }
+
+    let disposed = false;
+
+    setDiffStateByKey((current) => ({
+      ...current,
+      [selectedCompareKey]: "loading"
+    }));
+    setDiffErrorByKey((current) => ({
+      ...current,
+      [selectedCompareKey]: ""
+    }));
+
+    void (async () => {
+      try {
+        let payload: SkillDiffPayload;
+
+        try {
+          payload = await loadSkillDiff(
+            repoUrl,
+            rootConfigs,
+            selectedItem.root.id,
+            selectedItem.row.name
+          );
+        } catch (error) {
+          if (isPreviewRuntimeError(error)) {
+            payload = fallbackSkillDiff(selectedItem.row);
+          } else {
+            throw error;
+          }
+        }
+
+        if (disposed) {
+          return;
+        }
+
+        setDiffCache((current) => ({
+          ...current,
+          [selectedCompareKey]: payload
+        }));
+        setDiffStateByKey((current) => ({
+          ...current,
+          [selectedCompareKey]: "ready"
+        }));
+      } catch (error) {
+        if (disposed) {
+          return;
+        }
+
+        setDiffStateByKey((current) => ({
+          ...current,
+          [selectedCompareKey]: "error"
+        }));
+        setDiffErrorByKey((current) => ({
+          ...current,
+          [selectedCompareKey]: String(error)
+        }));
+      }
+    })();
+
+    return () => {
+      disposed = true;
+    };
+  }, [
+    repoUrl,
+    rootConfigs,
+    selectedCompareKey,
+    selectedItem
+  ]);
 
   const counts = useMemo(
     () => ({
@@ -621,6 +750,13 @@ export function useSkillSyncState(preferences: AppPreferences) {
     selectedRowId,
     setSelectedSkill,
     selectedItem,
+    selectedCompare,
+    selectedCompareLoading:
+      Boolean(selectedCompareKey) &&
+      (selectedCompareState === "loading" || selectedCompareState === "idle"),
+    selectedCompareError,
+    selectedDiffFilePath,
+    setSelectedDiffFilePath,
     recentNotes,
     reviewDecisions,
     setReviewDecision,

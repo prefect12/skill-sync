@@ -1,5 +1,6 @@
 import { AppBrand } from "./AppBrand";
 import { formatActionLabel, formatStateLabel, getMessages } from "../lib/i18n";
+import { SkillDiffPanel } from "./SkillDiffPanel";
 import { openAppWindow } from "../lib/windowing";
 import { useSkillSyncState, type MainFilter } from "../state/useSkillSyncState";
 import type { AppPreferences, Language, SkillListRow, SyncOperationType } from "../lib/types";
@@ -456,6 +457,17 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
                       ))}
                     </div>
                   </section>
+                ) : null}
+
+                {selectedRow.state !== "in-sync" ? (
+                  <SkillDiffPanel
+                    language={preferences.language}
+                    compare={state.selectedCompare}
+                    loading={state.selectedCompareLoading}
+                    error={state.selectedCompareError}
+                    activeFilePath={state.selectedDiffFilePath}
+                    onSelectFile={state.setSelectedDiffFilePath}
+                  />
                 ) : null}
 
                 <section className="inspector-section">
