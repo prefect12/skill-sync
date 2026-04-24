@@ -51,11 +51,13 @@
 html,
 body,
 #root {
-  min-height: 100vh;
+  height: 100%;
+  min-height: 100%;
 }
 
 body {
   margin: 0;
+  overflow: hidden;
   background:
     radial-gradient(circle at top left, rgba(255, 255, 255, 0.08), transparent 18%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 22%),
@@ -119,12 +121,15 @@ select:focus {
 }
 
 .window-shell {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   padding: 0;
+  overflow: hidden;
 }
 
 .window-content {
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
   display: grid;
   gap: 16px;
   padding: 18px;
@@ -495,6 +500,7 @@ h3 {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
   gap: 16px;
+  overflow: hidden;
 }
 
 .utility-split {
@@ -551,6 +557,12 @@ h3 {
 .inspector-stack,
 .activity-list {
   min-height: 0;
+}
+
+.skill-list,
+.roots-table {
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .skill-list,
