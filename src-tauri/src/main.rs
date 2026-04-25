@@ -85,6 +85,7 @@ struct DiscoverRootsPayload {
 struct RemoteScanPayload {
     roots: Vec<RemoteRootSnapshot>,
     notes: Vec<String>,
+    ignored_skill_ids: BTreeMap<String, bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +119,23 @@ struct SyncResult {
     remote_roots: Vec<RemoteRootSnapshot>,
     notes: Vec<String>,
     synced_row_ids: Vec<String>,
+    ignored_skill_ids: BTreeMap<String, bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IgnoredSkillFileEntry {
+    id: String,
+    root_id: String,
+    name: String,
+    ignored_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IgnoredSkillsFile {
+    version: u8,
+    skills: Vec<IgnoredSkillFileEntry>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,6 +203,13 @@ struct GitHubValidationInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct GitHubCreateRepositoryInput {
+    name: String,
+    private: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GitHubRepositoryValidation {
     full_name: String,
     url: String,
@@ -218,6 +243,7 @@ enum CommandError {
 }
 
 const GITHUB_HOST: &str = "github.com";
+const IGNORED_SKILLS_FILE_PATH: &str = ".skillsync/ignored-skills.json";
 const GH_ENV: [(&str, &str); 2] = [
     ("GH_HOST", GITHUB_HOST),
     ("GH_PROMPT_DISABLED", "1"),
@@ -333,6 +359,36 @@ fn normalize_repo_full_name(input: &str) -> Result<String, String> {
     }
 
     Ok(format!("{}/{}", parts[0], parts[1]))
+}
+
+fn normalize_new_repo_name(input: &str) -> Result<String, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("Repository name must not be empty.".into());
+    }
+
+    if trimmed.starts_with('-')
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.chars().any(char::is_whitespace)
+        || !trimmed
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+    {
+        return Err(format!("Repository name contains unsupported characters: {input}"));
+    }
+
+    Ok(trimmed.to_string())
+}
+
+fn github_create_repository_args(name: &str, is_private: bool) -> Result<Vec<String>, String> {
+    let normalized = normalize_new_repo_name(name)?;
+    Ok(vec![
+        "repo".into(),
+        "create".into(),
+        normalized,
+        if is_private { "--private" } else { "--public" }.into(),
+    ])
 }
 
 fn build_repo_validation(full_name: &str) -> GitHubRepositoryValidation {
@@ -744,6 +800,11 @@ fn run_gh(args: &[&str]) -> Result<String, String> {
     run_command_checked_with_env("gh", None, args, &GH_ENV)
 }
 
+fn run_gh_owned(args: &[String]) -> Result<String, String> {
+    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_gh(&refs)
+}
+
 fn run_gh_auth_status() -> Result<CommandResponse, CommandError> {
     run_command_with_env(
         "gh",
@@ -868,10 +929,55 @@ fn refresh_repo_with_fallback(repo_dir: &Path, repo_url: &str) -> Result<(), Str
     for candidate in candidates {
         run_git(Some(repo_dir), &["remote", "set-url", "origin", &candidate])?;
 
-        match run_git(Some(repo_dir), &["pull", "--ff-only"]) {
-            Ok(_) => return Ok(()),
-            Err(error) => failures.push(format!("{candidate}: {error}")),
+        let fetch_result = run_git(Some(repo_dir), &["fetch", "--prune", "origin"]);
+        if let Err(error) = fetch_result {
+            failures.push(format!("{candidate}: {error}"));
+            continue;
         }
+
+        let upstream = run_git(
+            Some(repo_dir),
+            &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        )
+        .ok()
+        .filter(|value| value.starts_with("origin/"));
+        let current_branch = run_git(Some(repo_dir), &["branch", "--show-current"]).ok();
+        let default_branch = run_git(
+            Some(repo_dir),
+            &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+        )
+        .ok();
+
+        let mut merge_targets = vec![];
+        if let Some(target) = upstream {
+            merge_targets.push(target);
+        }
+        if let Some(branch) = current_branch.filter(|value| !value.trim().is_empty()) {
+            let target = format!("origin/{}", branch.trim());
+            if !merge_targets.contains(&target) {
+                merge_targets.push(target);
+            }
+        }
+        if let Some(target) = default_branch {
+            if !merge_targets.contains(&target) {
+                merge_targets.push(target);
+            }
+        }
+
+        if merge_targets.is_empty() {
+            failures.push(format!("{candidate}: could not resolve a remote branch to fast-forward"));
+            continue;
+        }
+
+        let mut merge_failures = vec![];
+        for target in merge_targets {
+            match run_git(Some(repo_dir), &["merge", "--ff-only", &target]) {
+                Ok(_) => return Ok(()),
+                Err(error) => merge_failures.push(format!("{target}: {error}")),
+            }
+        }
+
+        failures.push(format!("{candidate}: {}", merge_failures.join("; ")));
     }
 
     Err(format!(
@@ -1230,8 +1336,105 @@ fn write_manifest(repo_dir: &Path, roots: &[SkillRootConfig]) -> Result<(), Stri
     Ok(())
 }
 
-#[tauri::command]
-fn github_status() -> Result<GitHubStatusPayload, String> {
+fn empty_ignored_skills_file() -> IgnoredSkillsFile {
+    IgnoredSkillsFile {
+        version: 1,
+        skills: vec![],
+    }
+}
+
+fn ignored_skills_path(repo_dir: &Path) -> PathBuf {
+    repo_dir.join(IGNORED_SKILLS_FILE_PATH)
+}
+
+fn ignored_skill_id(root_id: &str, skill_name: &str) -> Result<String, String> {
+    Ok(format!("{root_id}:{}", normalize_skill_name(skill_name)?))
+}
+
+fn ignored_skill_ids(file: &IgnoredSkillsFile) -> BTreeMap<String, bool> {
+    file.skills
+        .iter()
+        .map(|entry| (entry.id.clone(), true))
+        .collect()
+}
+
+fn read_ignored_skills(repo_dir: &Path) -> Result<IgnoredSkillsFile, String> {
+    let path = ignored_skills_path(repo_dir);
+    if !path.exists() {
+        return Ok(empty_ignored_skills_file());
+    }
+
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
+    let mut file = serde_json::from_slice::<IgnoredSkillsFile>(&bytes)
+        .map_err(|error| format!("Failed to parse {}: {error}", path.display()))?;
+    file.skills.sort_by(|a, b| a.id.cmp(&b.id));
+    file.skills.dedup_by(|a, b| a.id == b.id);
+    Ok(file)
+}
+
+fn write_ignored_skills(repo_dir: &Path, file: &IgnoredSkillsFile) -> Result<(), String> {
+    let path = ignored_skills_path(repo_dir);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create {}: {error}", parent.display()))?;
+    }
+
+    let mut normalized = file.clone();
+    normalized.version = 1;
+    normalized.skills.sort_by(|a, b| a.id.cmp(&b.id));
+    normalized.skills.dedup_by(|a, b| a.id == b.id);
+
+    let payload = serde_json::to_vec_pretty(&normalized)
+        .map_err(|error| format!("Failed to serialize ignored skills: {error}"))?;
+    fs::write(&path, payload)
+        .map_err(|error| format!("Failed to write {}: {error}", path.display()))?;
+    Ok(())
+}
+
+fn upsert_ignored_skill(
+    file: &mut IgnoredSkillsFile,
+    root_id: &str,
+    skill_name: &str,
+) -> Result<bool, String> {
+    let name = normalize_skill_name(skill_name)?;
+    let id = format!("{root_id}:{name}");
+    if file.skills.iter().any(|entry| entry.id == id) {
+        return Ok(false);
+    }
+
+    file.skills.push(IgnoredSkillFileEntry {
+        id,
+        root_id: root_id.to_string(),
+        name,
+        ignored_at_ms: system_time_to_ms(SystemTime::now()),
+    });
+    file.skills.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(true)
+}
+
+fn remove_ignored_skill(
+    file: &mut IgnoredSkillsFile,
+    root_id: &str,
+    skill_name: &str,
+) -> Result<bool, String> {
+    let id = ignored_skill_id(root_id, skill_name)?;
+    let before = file.skills.len();
+    file.skills.retain(|entry| entry.id != id);
+    Ok(file.skills.len() != before)
+}
+
+async fn run_blocking<T, F>(task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|error| format!("Background task failed: {error}"))?
+}
+
+fn github_status_impl() -> Result<GitHubStatusPayload, String> {
     let auth_response = run_gh_auth_status();
     let username = match &auth_response {
         Ok(response) if response.success => {
@@ -1244,8 +1447,12 @@ fn github_status() -> Result<GitHubStatusPayload, String> {
 }
 
 #[tauri::command]
-fn github_list_owners() -> Result<Vec<GitHubOwner>, String> {
-    let status = github_status()?;
+async fn github_status() -> Result<GitHubStatusPayload, String> {
+    run_blocking(github_status_impl).await
+}
+
+fn github_list_owners_impl() -> Result<Vec<GitHubOwner>, String> {
+    let status = github_status_impl()?;
     if !status.authenticated {
         return Err(status
             .note
@@ -1261,7 +1468,11 @@ fn github_list_owners() -> Result<Vec<GitHubOwner>, String> {
 }
 
 #[tauri::command]
-fn github_list_repositories(owner: String, limit: Option<u32>) -> Result<Vec<GitHubRepository>, String> {
+async fn github_list_owners() -> Result<Vec<GitHubOwner>, String> {
+    run_blocking(github_list_owners_impl).await
+}
+
+fn github_list_repositories_impl(owner: String, limit: Option<u32>) -> Result<Vec<GitHubRepository>, String> {
     let trimmed_owner = owner.trim();
     if trimmed_owner.is_empty() {
         return Err("GitHub owner must not be empty.".into());
@@ -1284,7 +1495,11 @@ fn github_list_repositories(owner: String, limit: Option<u32>) -> Result<Vec<Git
 }
 
 #[tauri::command]
-fn github_validate_repository(input: GitHubValidationInput) -> Result<GitHubRepositoryValidation, String> {
+async fn github_list_repositories(owner: String, limit: Option<u32>) -> Result<Vec<GitHubRepository>, String> {
+    run_blocking(move || github_list_repositories_impl(owner, limit)).await
+}
+
+fn github_validate_repository_impl(input: GitHubValidationInput) -> Result<GitHubRepositoryValidation, String> {
     let parsed = if let Some(full_name) = input.full_name.as_deref() {
         build_repo_validation(&normalize_repo_full_name(full_name)?)
     } else if let Some(repo_url) = input.repo_url.as_deref() {
@@ -1293,7 +1508,7 @@ fn github_validate_repository(input: GitHubValidationInput) -> Result<GitHubRepo
         return Err("Provide either a GitHub repository full name or URL.".into());
     };
 
-    match github_status()? {
+    match github_status_impl()? {
         GitHubStatusPayload { authenticated: true, .. } => {
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
@@ -1326,7 +1541,38 @@ fn github_validate_repository(input: GitHubValidationInput) -> Result<GitHubRepo
 }
 
 #[tauri::command]
-fn discover_roots(base_dir: Option<String>) -> Result<DiscoverRootsPayload, String> {
+async fn github_validate_repository(input: GitHubValidationInput) -> Result<GitHubRepositoryValidation, String> {
+    run_blocking(move || github_validate_repository_impl(input)).await
+}
+
+fn github_create_repository_impl(input: GitHubCreateRepositoryInput) -> Result<GitHubRepositoryValidation, String> {
+    let status = github_status_impl()?;
+    if !status.authenticated {
+        return Err(status
+            .note
+            .unwrap_or_else(|| "GitHub CLI is not authenticated.".into()));
+    }
+
+    let name = normalize_new_repo_name(&input.name)?;
+    let username = status
+        .username
+        .ok_or_else(|| "GitHub CLI did not return a username.".to_string())?;
+
+    let args = github_create_repository_args(&name, input.private)?;
+    run_gh_owned(&args)?;
+
+    github_validate_repository_impl(GitHubValidationInput {
+        full_name: Some(format!("{}/{}", username.trim(), name)),
+        repo_url: None,
+    })
+}
+
+#[tauri::command]
+async fn github_create_repository(input: GitHubCreateRepositoryInput) -> Result<GitHubRepositoryValidation, String> {
+    run_blocking(move || github_create_repository_impl(input)).await
+}
+
+fn discover_roots_impl(base_dir: Option<String>) -> Result<DiscoverRootsPayload, String> {
     let home = home_dir()?;
     let mut roots = vec![
         SkillRootConfig {
@@ -1396,12 +1642,20 @@ fn discover_roots(base_dir: Option<String>) -> Result<DiscoverRootsPayload, Stri
 }
 
 #[tauri::command]
-fn scan_local_roots(roots: Vec<SkillRootConfig>) -> Result<Vec<LocalRootSnapshot>, String> {
+async fn discover_roots(base_dir: Option<String>) -> Result<DiscoverRootsPayload, String> {
+    run_blocking(move || discover_roots_impl(base_dir)).await
+}
+
+fn scan_local_roots_impl(roots: Vec<SkillRootConfig>) -> Result<Vec<LocalRootSnapshot>, String> {
     roots.iter().map(scan_root).collect()
 }
 
 #[tauri::command]
-fn load_remote_snapshot(
+async fn scan_local_roots(roots: Vec<SkillRootConfig>) -> Result<Vec<LocalRootSnapshot>, String> {
+    run_blocking(move || scan_local_roots_impl(roots)).await
+}
+
+fn load_remote_snapshot_impl(
     repo_url: String,
     roots: Vec<SkillRootConfig>,
 ) -> Result<RemoteScanPayload, String> {
@@ -1409,10 +1663,12 @@ fn load_remote_snapshot(
         return Ok(RemoteScanPayload {
             roots: vec![],
             notes: vec!["No GitHub repo URL configured yet.".into()],
+            ignored_skill_ids: BTreeMap::new(),
         });
     }
 
     let repo_dir = ensure_repo_clone(&repo_url)?;
+    let ignored = read_ignored_skills(&repo_dir)?;
     let snapshots = roots
         .iter()
         .map(|root| scan_remote_root(&repo_dir, root))
@@ -1421,11 +1677,19 @@ fn load_remote_snapshot(
     Ok(RemoteScanPayload {
         roots: snapshots,
         notes: vec![format!("Loaded remote snapshot from {}", repo_dir.display())],
+        ignored_skill_ids: ignored_skill_ids(&ignored),
     })
 }
 
 #[tauri::command]
-fn load_skill_diff(
+async fn load_remote_snapshot(
+    repo_url: String,
+    roots: Vec<SkillRootConfig>,
+) -> Result<RemoteScanPayload, String> {
+    run_blocking(move || load_remote_snapshot_impl(repo_url, roots)).await
+}
+
+fn load_skill_diff_impl(
     repo_url: String,
     roots: Vec<SkillRootConfig>,
     root_id: String,
@@ -1451,7 +1715,16 @@ fn load_skill_diff(
 }
 
 #[tauri::command]
-fn sync_selected_items(
+async fn load_skill_diff(
+    repo_url: String,
+    roots: Vec<SkillRootConfig>,
+    root_id: String,
+    skill_name: String,
+) -> Result<SkillDiffPayload, String> {
+    run_blocking(move || load_skill_diff_impl(repo_url, roots, root_id, skill_name)).await
+}
+
+fn sync_selected_items_impl(
     repo_url: String,
     roots: Vec<SkillRootConfig>,
     operations: Vec<SyncOperation>,
@@ -1461,6 +1734,8 @@ fn sync_selected_items(
     }
 
     let repo_dir = ensure_repo_clone(&repo_url)?;
+    let mut ignored_file = read_ignored_skills(&repo_dir)?;
+    let mut ignored_file_changed = false;
     let mut synced = vec![];
     let mut notes = vec![];
 
@@ -1507,6 +1782,17 @@ fn sync_selected_items(
                 remove_path_if_exists(&remote_skill_dir)?;
                 synced.push(operation.row_id.clone());
             }
+            "ignore-remote" => {
+                if upsert_ignored_skill(&mut ignored_file, &operation.root_id, &operation.skill_name)? {
+                    ignored_file_changed = true;
+                }
+                remove_path_if_exists(&remote_skill_dir)?;
+            }
+            "unignore" => {
+                if remove_ignored_skill(&mut ignored_file, &operation.root_id, &operation.skill_name)? {
+                    ignored_file_changed = true;
+                }
+            }
             "delete-local" => {
                 let local_target_dir = local_write_path(&local_skill_dir)?;
                 remove_path_if_exists(&local_target_dir)?;
@@ -1529,17 +1815,28 @@ fn sync_selected_items(
     }
 
     write_manifest(&repo_dir, &roots)?;
+    if ignored_file_changed {
+        write_ignored_skills(&repo_dir, &ignored_file)?;
+    }
     let _ = run_git(Some(&repo_dir), &["add", "."])?;
     let status = run_git(Some(&repo_dir), &["status", "--porcelain"])?;
     if status.trim().is_empty() {
         notes.push("No repository changes were generated by the selected sync actions.".into());
     } else {
-        let commit_message = format!("Sync {} skill item(s) from SkillSync", synced.len());
+        let only_tracking_rules = operations
+            .iter()
+            .all(|operation| matches!(operation.action.as_str(), "ignore-remote" | "unignore"));
+        let commit_message = if only_tracking_rules {
+            format!("Update SkillSync tracking rules for {} skill item(s)", operations.len())
+        } else {
+            format!("Sync {} skill item(s) from SkillSync", operations.len())
+        };
         let _ = run_git(Some(&repo_dir), &["commit", "-m", &commit_message])?;
         let _ = run_git(Some(&repo_dir), &["push"])?;
-        notes.push(format!("Committed and pushed {} sync action(s).", synced.len()));
+        notes.push(format!("Committed and pushed {} sync action(s).", operations.len()));
     }
 
+    let ignored_file = read_ignored_skills(&repo_dir)?;
     let remote_roots = roots
         .iter()
         .map(|root| scan_remote_root(&repo_dir, root))
@@ -1549,7 +1846,17 @@ fn sync_selected_items(
         remote_roots,
         notes,
         synced_row_ids: synced,
+        ignored_skill_ids: ignored_skill_ids(&ignored_file),
     })
+}
+
+#[tauri::command]
+async fn sync_selected_items(
+    repo_url: String,
+    roots: Vec<SkillRootConfig>,
+    operations: Vec<SyncOperation>,
+) -> Result<SyncResult, String> {
+    run_blocking(move || sync_selected_items_impl(repo_url, roots, operations)).await
 }
 
 fn main() -> io::Result<()> {
@@ -1641,6 +1948,7 @@ fn main() -> io::Result<()> {
             github_list_owners,
             github_list_repositories,
             github_validate_repository,
+            github_create_repository,
             discover_roots,
             scan_local_roots,
             load_remote_snapshot,
@@ -1712,6 +2020,49 @@ mod tests {
     #[test]
     fn parse_repo_url_rejects_non_github_hosts() {
         assert!(parse_repo_url("https://gitlab.com/acme/skills").is_err());
+    }
+
+    #[test]
+    fn github_create_repository_args_validate_name_and_visibility() {
+        assert_eq!(
+            github_create_repository_args("skillsync-skills", true).unwrap(),
+            vec!["repo", "create", "skillsync-skills", "--private"]
+        );
+        assert_eq!(
+            github_create_repository_args("team.skills", false).unwrap(),
+            vec!["repo", "create", "team.skills", "--public"]
+        );
+        assert!(github_create_repository_args("../escape", true).is_err());
+        assert!(github_create_repository_args("bad name", true).is_err());
+        assert!(github_create_repository_args("-bad", true).is_err());
+    }
+
+    #[test]
+    fn ignored_skills_file_records_and_removes_tracking_rules() {
+        let repo_dir = create_test_dir("ignored-skills");
+        let mut file = empty_ignored_skills_file();
+
+        assert!(upsert_ignored_skill(&mut file, "codex-home", ".system/imagegen").unwrap());
+        assert!(!upsert_ignored_skill(&mut file, "codex-home", ".system/imagegen").unwrap());
+        write_ignored_skills(&repo_dir, &file).unwrap();
+
+        let stored = read_ignored_skills(&repo_dir).unwrap();
+        assert_eq!(stored.skills.len(), 1);
+        assert_eq!(stored.skills[0].id, "codex-home:.system/imagegen");
+        assert_eq!(
+            ignored_skill_ids(&stored)
+                .get("codex-home:.system/imagegen")
+                .copied(),
+            Some(true)
+        );
+
+        let mut next = stored;
+        assert!(remove_ignored_skill(&mut next, "codex-home", ".system/imagegen").unwrap());
+        assert!(!remove_ignored_skill(&mut next, "codex-home", ".system/imagegen").unwrap());
+        write_ignored_skills(&repo_dir, &next).unwrap();
+
+        assert!(read_ignored_skills(&repo_dir).unwrap().skills.is_empty());
+        let _ = fs::remove_dir_all(repo_dir);
     }
 
     #[test]

@@ -9,6 +9,7 @@ export type Language = "en" | "zh-CN";
 export type AppearanceMode = "system" | "light" | "dark";
 export type WindowView = "main" | "roots" | "settings";
 export type GitHubOwnerKind = "user" | "org";
+export type OnboardingStep = "discover" | "connect" | "backup" | "done";
 
 export type SyncState =
   | "in-sync"
@@ -34,6 +35,7 @@ export type BuiltInRootOverride = Partial<
   Pick<SkillRootConfig, "label" | "providerHint" | "localPath" | "remotePath" | "enabled">
 >;
 export type KnownSyncedEntries = Record<string, string | true>;
+export type IgnoredSkillEntries = Record<string, true>;
 
 export interface AppPreferences {
   language: Language;
@@ -103,6 +105,7 @@ export interface DiscoverRootsPayload {
 export interface RemoteScanPayload {
   roots: RemoteRootSnapshot[];
   notes: string[];
+  ignoredSkillIds: IgnoredSkillEntries;
 }
 
 export type SkillDiffChange = "modified" | "added" | "removed";
@@ -131,12 +134,15 @@ export type SyncOperationType =
   | "pull"
   | "delete-local"
   | "delete-remote"
-  | "restore-local";
+  | "restore-local"
+  | "ignore-remote"
+  | "unignore";
 
 export interface SyncResult {
   remoteRoots: RemoteRootSnapshot[];
   notes: string[];
   syncedRowIds: string[];
+  ignoredSkillIds: IgnoredSkillEntries;
 }
 
 export interface GitHubStatus {

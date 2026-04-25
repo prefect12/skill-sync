@@ -21,15 +21,23 @@ import {
 import { getMessages } from "../lib/i18n";
 import { MENU_COMMAND_EVENT, type MenuCommand } from "../lib/menu";
 import {
+  countLocalSkills,
+  countRemoteSkills,
+  isFirstBackupRecommended,
+  resolveOnboardingStep
+} from "../lib/onboarding";
+import {
   mergeRootConfigs,
   readDefaultInstallRoots,
   readKnownSyncedIds,
   readBuiltInRootOverrides,
   readLastGitHubOwner,
+  readOnboardingDismissed,
   readRepoUrl,
   readRootConfigs,
   writeKnownSyncedIds,
   writeLastGitHubOwner,
+  writeOnboardingDismissed,
   writeRepoUrl
 } from "../lib/persistence";
 import {
@@ -48,8 +56,14 @@ import {
   PREVIEW_RUNTIME_ERROR,
   scanLocalRoots,
   syncSelectedItems,
-  validateGitHubRepository
+  validateGitHubRepository,
+  createGitHubRepository
 } from "../lib/tauri";
+import {
+  isReviewDecisionAllowed,
+  syncActionFromReviewDecision,
+  type ReviewDecision
+} from "../lib/syncDecisions";
 import { isTauriRuntime } from "../lib/windowing";
 import type {
   AppPreferences,
@@ -57,29 +71,40 @@ import type {
   GitHubRepository,
   GitHubRepositoryValidation,
   GitHubStatus,
+  IgnoredSkillEntries,
   LocalRootSnapshot,
+  RemoteScanPayload,
   RemoteRootSnapshot,
   SkillDiffPayload,
   SkillListRow,
   SkillRootConfig,
   SyncOperation,
-  SyncOperationType,
   SyncState
 } from "../lib/types";
 
-export type MainFilter = "all" | "changed" | "conflicts" | "pending-delete";
+export type MainFilter =
+  | "actionable"
+  | "changed"
+  | "conflicts"
+  | "pending-delete"
+  | "ignored"
+  | "all";
+type LoadIntent = "startup" | "refresh" | "repository" | "sync";
 
 const FALLBACK_GITHUB_STATUS: GitHubStatus = {
   cliAvailable: false,
   authenticated: false
 };
+const DEFAULT_GITHUB_REPOSITORY_NAME = "skillsync-skills";
 
 function isPreviewRuntimeError(error: unknown) {
   return String(error).includes(PREVIEW_RUNTIME_ERROR);
 }
 
-function matchesFilter(state: SyncState, filter: MainFilter) {
+function matchesFilter(state: SyncState, filter: Exclude<MainFilter, "ignored">) {
   switch (filter) {
+    case "actionable":
+      return state !== "in-sync";
     case "changed":
       return (
         state === "local-changed" ||
@@ -122,11 +147,13 @@ export function useSkillSyncState(preferences: AppPreferences) {
   const [notes, setNotes] = useState<string[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [knownSyncedIds, setKnownSyncedIds] = useState(readKnownSyncedIds);
+  const [ignoredSkillIds, setIgnoredSkillIds] = useState<IgnoredSkillEntries>({});
   const [selectedRowId, setSelectedRowId] = useState<string>("");
-  const [reviewDecisions, setReviewDecisions] = useState<
-    Record<string, SyncOperationType | "skip" | undefined>
-  >({});
-  const [filter, setFilter] = useState<MainFilter>("all");
+  const [reviewDecisions, setReviewDecisions] = useState<Record<string, ReviewDecision | undefined>>({});
+  const [onboardingDismissed, setOnboardingDismissed] = useState(readOnboardingDismissed);
+  const [showAdvancedDetails, setShowAdvancedDetails] = useState(false);
+  const [creatingRepository, setCreatingRepository] = useState(false);
+  const [filter, setFilter] = useState<MainFilter>("actionable");
   const [githubStatus, setGitHubStatus] = useState<GitHubStatus>(FALLBACK_GITHUB_STATUS);
   const [githubOwners, setGitHubOwners] = useState<GitHubOwner[]>([]);
   const [selectedOwner, setSelectedOwnerState] = useState(readLastGitHubOwner);
@@ -134,10 +161,12 @@ export function useSkillSyncState(preferences: AppPreferences) {
   const [repositoryLoadError, setRepositoryLoadError] = useState("");
   const [repoValidation, setRepoValidation] = useState<GitHubRepositoryValidation | null>(null);
   const [repoUrlError, setRepoUrlError] = useState("");
+  const [remoteLoadError, setRemoteLoadError] = useState("");
   const [diffCache, setDiffCache] = useState<Record<string, SkillDiffPayload>>({});
   const [diffStateByKey, setDiffStateByKey] = useState<Record<string, CompareLoadState>>({});
   const [diffErrorByKey, setDiffErrorByKey] = useState<Record<string, string>>({});
   const [selectedDiffFilePath, setSelectedDiffFilePath] = useState("");
+  const [loadIntent, setLoadIntent] = useState<LoadIntent | null>("startup");
   const [refreshing, startRefresh] = useTransition();
   const [syncing, startSync] = useTransition();
   const [loadingRepositories, startRepositoryLoad] = useTransition();
@@ -234,8 +263,13 @@ export function useSkillSyncState(preferences: AppPreferences) {
   async function loadAll(
     overrideRoots?: SkillRootConfig[],
     overrideRepoUrl?: string,
-    ownerOverride?: string
+    ownerOverride?: string,
+    intent?: LoadIntent
   ) {
+    if (intent) {
+      setLoadIntent(intent);
+    }
+
     const logger = createLoadLogger(
       overrideRoots || overrideRepoUrl !== undefined || ownerOverride ? "Reload" : "Startup"
     );
@@ -246,7 +280,12 @@ export function useSkillSyncState(preferences: AppPreferences) {
     let discovered = fallbackRoots();
     let mergedRoots = overrideRoots ?? mergeRootConfigs(fallbackRoots().roots, customRoots, builtInOverrides);
     let local = fallbackLocalSnapshots(mergedRoots);
-    let remote = fallbackRemoteSnapshot(mergedRoots);
+    let remote: RemoteScanPayload = {
+      roots: remoteSnapshots,
+      notes: [],
+      ignoredSkillIds
+    };
+    let nextRemoteLoadError = "";
     const mergedNotes: string[] = [];
 
     const githubPromise = loadGitHubContext(localRepoUrl, ownerOverride);
@@ -289,20 +328,28 @@ export function useSkillSyncState(preferences: AppPreferences) {
         mergedNotes.push(...payload.notes);
         mergedNotes.push(logger.step(`loaded ${payload.roots.length} remote root snapshot(s)`));
       } catch (error) {
-        if (!isPreviewRuntimeError(error)) {
-          mergedNotes.push(String(error));
+        if (isPreviewRuntimeError(error)) {
+          remote = fallbackRemoteSnapshot(mergedRoots);
+        } else {
+          nextRemoteLoadError = String(error);
+          mergedNotes.push(nextRemoteLoadError);
         }
-        remote = fallbackRemoteSnapshot(mergedRoots);
       }
     } else if (github.repoError) {
-      remote = { roots: [], notes: [github.repoError] };
+      remote = { roots: [], notes: [github.repoError], ignoredSkillIds: {} };
+      nextRemoteLoadError = github.repoError;
     } else {
-      remote = { roots: [], notes: [messages.missingRepoNote] };
+      remote = { roots: [], notes: [messages.missingRepoNote], ignoredSkillIds: {} };
     }
 
     setLocalSnapshots(local);
     setRemoteSnapshots(remote.roots);
+    setIgnoredSkillIds(remote.ignoredSkillIds);
+    setRemoteLoadError(nextRemoteLoadError);
     setNotes(mergedNotes.concat(remote.notes));
+    setLoadIntent((current) =>
+      current === (intent ?? "startup") ? null : current
+    );
 
     return {
       rootConfigs: mergedRoots,
@@ -313,7 +360,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
 
   // Keep the in-flight request alive across the "idle" -> "loading" state flip.
   useEffect(() => {
-    void loadAll(undefined, readRepoUrl());
+    void loadAll(undefined, readRepoUrl(), undefined, "startup");
   }, []);
 
   useEffect(() => {
@@ -321,11 +368,16 @@ export function useSkillSyncState(preferences: AppPreferences) {
   }, [repoUrl]);
 
   useEffect(() => {
+    writeOnboardingDismissed(onboardingDismissed);
+  }, [onboardingDismissed]);
+
+  useEffect(() => {
     const syncFromStorage = () => {
       setRepoUrl(readRepoUrl());
       setKnownSyncedIds(readKnownSyncedIds());
       setSelectedOwnerState(readLastGitHubOwner());
-      void loadAll();
+      setOnboardingDismissed(readOnboardingDismissed());
+      void loadAll(undefined, undefined, undefined, "refresh");
     };
 
     window.addEventListener("storage", syncFromStorage);
@@ -341,10 +393,26 @@ export function useSkillSyncState(preferences: AppPreferences) {
   );
 
   const allRows = useMemo(() => flattenSkillRows(groups), [groups]);
+  const unignoredRows = useMemo(
+    () => allRows.filter((item) => !ignoredSkillIds[item.row.id]),
+    [allRows, ignoredSkillIds]
+  );
+  const ignoredCount = useMemo(
+    () => allRows.filter((item) => ignoredSkillIds[item.row.id]).length,
+    [allRows, ignoredSkillIds]
+  );
+  const localSkillCount = useMemo(() => countLocalSkills(localSnapshots), [localSnapshots]);
+  const remoteSkillCount = useMemo(() => countRemoteSkills(remoteSnapshots), [remoteSnapshots]);
 
   const filteredRows = useMemo(
-    () => allRows.filter((item) => matchesFilter(item.row.state, filter)),
-    [allRows, filter]
+    () => {
+      if (filter === "ignored") {
+        return allRows.filter((item) => ignoredSkillIds[item.row.id]);
+      }
+
+      return unignoredRows.filter((item) => matchesFilter(item.row.state, filter));
+    },
+    [allRows, filter, ignoredSkillIds, unignoredRows]
   );
 
   useEffect(() => {
@@ -360,10 +428,9 @@ export function useSkillSyncState(preferences: AppPreferences) {
 
   const selectedItem =
     filteredRows.find((item) => item.row.id === selectedRowId) ??
-    allRows.find((item) => item.row.id === selectedRowId) ??
     null;
   const selectedCompareKey =
-    selectedItem && shouldShowCompare(selectedItem.row)
+    showAdvancedDetails && selectedItem && shouldShowCompare(selectedItem.row)
       ? buildSkillDiffCacheKey(selectedItem.row)
       : "";
   const selectedCompare =
@@ -468,12 +535,38 @@ export function useSkillSyncState(preferences: AppPreferences) {
 
   const counts = useMemo(
     () => ({
-      all: allRows.length,
-      changed: allRows.filter((item) => matchesFilter(item.row.state, "changed")).length,
-      conflicts: allRows.filter((item) => item.row.state === "conflict").length,
-      "pending-delete": allRows.filter((item) => item.row.state === "pending-delete").length
+      all: unignoredRows.length,
+      ignored: ignoredCount,
+      actionable: remoteLoadError
+        ? 0
+        : unignoredRows.filter((item) => matchesFilter(item.row.state, "actionable")).length,
+      changed: remoteLoadError
+        ? 0
+        : unignoredRows.filter((item) => matchesFilter(item.row.state, "changed")).length,
+      conflicts: remoteLoadError
+        ? 0
+        : unignoredRows.filter((item) => item.row.state === "conflict").length,
+      "pending-delete": remoteLoadError
+        ? 0
+        : unignoredRows.filter((item) => item.row.state === "pending-delete").length
     }),
-    [allRows]
+    [ignoredCount, remoteLoadError, unignoredRows]
+  );
+  const rowsNeedingAction = useMemo(
+    () =>
+      remoteLoadError
+        ? []
+        : unignoredRows.filter((item) => item.row.state !== "in-sync"),
+    [remoteLoadError, unignoredRows]
+  );
+  const reviewRequiredCount = useMemo(
+    () =>
+      rowsNeedingAction.filter(
+        (item) =>
+          needsReview(item.row) &&
+          !isReviewDecisionAllowed(item.row, reviewDecisions[item.row.id])
+      ).length,
+    [rowsNeedingAction, reviewDecisions]
   );
 
   const usesGitHubPicker = shouldUseGitHubPicker(githubStatus);
@@ -484,6 +577,10 @@ export function useSkillSyncState(preferences: AppPreferences) {
     Boolean(selectedPermission) && !canWriteToRepository(selectedPermission);
 
   function toggleSkill(rowId: string) {
+    if (ignoredSkillIds[rowId]) {
+      return;
+    }
+
     setSelectedIds((current) => {
       const next = new Set(current);
       if (next.has(rowId)) {
@@ -503,6 +600,10 @@ export function useSkillSyncState(preferences: AppPreferences) {
     setSelectedIds((current) => {
       const next = new Set(current);
       filteredRows.forEach((item) => {
+        if (ignoredSkillIds[item.row.id]) {
+          return;
+        }
+
         if (checked) {
           next.add(item.row.id);
         } else {
@@ -513,7 +614,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
     });
   }
 
-  function setReviewDecision(rowId: string, decision: SyncOperationType | "skip") {
+  function setReviewDecision(rowId: string, decision: ReviewDecision) {
     setReviewDecisions((current) => ({
       ...current,
       [rowId]: decision
@@ -521,7 +622,65 @@ export function useSkillSyncState(preferences: AppPreferences) {
   }
 
   function selectedRowsList(): SkillListRow[] {
-    return allRows.filter((item) => selectedIds.has(item.row.id));
+    return unignoredRows.filter((item) => selectedIds.has(item.row.id));
+  }
+
+  function syncTrackingRule(rowId: string, action: "ignore-remote" | "unignore") {
+    if (!repoUrl.trim()) {
+      setNotes((current) => current.concat(messages.repoRequiredAlert));
+      return;
+    }
+
+    if (repoUrlError) {
+      setNotes((current) => current.concat(repoUrlError));
+      return;
+    }
+
+    if (syncBlockedByPermission) {
+      setNotes((current) => current.concat(messages.syncDisabledReadOnlyNote));
+      return;
+    }
+
+    if (remoteLoadError) {
+      setNotes((current) => current.concat(remoteLoadError));
+      return;
+    }
+
+    const item = allRows.find((candidate) => candidate.row.id === rowId);
+    if (!item) {
+      setNotes((current) => current.concat(`Cannot find skill row: ${rowId}`));
+      return;
+    }
+
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      next.delete(rowId);
+      return next;
+    });
+    setReviewDecisions((current) => {
+      const next = { ...current };
+      delete next[rowId];
+      return next;
+    });
+
+    startSync(() => {
+      void runSync([
+        {
+          rowId: item.row.id,
+          rootId: item.row.rootId,
+          skillName: item.row.name,
+          action
+        }
+      ]);
+    });
+  }
+
+  function ignoreSkill(rowId: string) {
+    syncTrackingRule(rowId, "ignore-remote");
+  }
+
+  function restoreIgnoredSkill(rowId: string) {
+    syncTrackingRule(rowId, "unignore");
   }
 
   function setManualRepoUrl(value: string) {
@@ -548,7 +707,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
     setRepoUrlError("");
 
     startRepositoryLoad(() => {
-      void loadAll(rootConfigs, "", nextOwner);
+      void loadAll(rootConfigs, "", nextOwner, "repository");
     });
   }
 
@@ -571,8 +730,36 @@ export function useSkillSyncState(preferences: AppPreferences) {
     setRepoUrl(repository.url);
 
     startRefresh(() => {
-      void loadAll(rootConfigs, repository.url, repository.owner);
+      void loadAll(rootConfigs, repository.url, repository.owner, "repository");
     });
+  }
+
+  async function createDefaultRepository() {
+    if (!githubStatus.cliAvailable || !githubStatus.authenticated) {
+      setNotes((current) => current.concat(messages.githubLoginRequiredCopy));
+      return;
+    }
+
+    setCreatingRepository(true);
+    try {
+      const validation = await createGitHubRepository({
+        name: DEFAULT_GITHUB_REPOSITORY_NAME,
+        private: true
+      });
+      const owner = validation.fullName.split("/")[0] ?? "";
+
+      setRepoValidation(validation);
+      setRepoUrlError("");
+      setRepoUrl(validation.url);
+      setSelectedOwnerState(owner);
+      writeLastGitHubOwner(owner);
+      setOnboardingDismissed(false);
+      await loadAll(rootConfigs, validation.url, owner, "repository");
+    } catch (error) {
+      setNotes((current) => current.concat(String(error)));
+    } finally {
+      setCreatingRepository(false);
+    }
   }
 
   async function runSync(operations: SyncOperation[]) {
@@ -586,10 +773,11 @@ export function useSkillSyncState(preferences: AppPreferences) {
       setRemoteSnapshots((current) =>
         result.remoteRoots.length ? result.remoteRoots : current
       );
+      setIgnoredSkillIds(result.ignoredSkillIds);
       setNotes((current) => current.concat(result.notes));
       setSelectedIds(new Set());
       setReviewDecisions({});
-      const refreshed = await loadAll(rootConfigs, repoUrl, selectedOwner);
+      const refreshed = await loadAll(rootConfigs, repoUrl, selectedOwner, "sync");
       const refreshedRows = flattenSkillRows(
         buildRootGroups(
           refreshed.rootConfigs,
@@ -610,7 +798,44 @@ export function useSkillSyncState(preferences: AppPreferences) {
     }
   }
 
-  function syncSelected() {
+  function buildOperationsForRows(rows: SkillListRow[]) {
+    const unresolved = rows.filter(
+      (item) =>
+        needsReview(item.row) &&
+        !isReviewDecisionAllowed(item.row, reviewDecisions[item.row.id])
+    );
+    const operations: SyncOperation[] = [];
+
+    rows.forEach((item) => {
+      if (needsReview(item.row)) {
+        const action = syncActionFromReviewDecision(item.row, reviewDecisions[item.row.id]);
+        if (!action) {
+          return;
+        }
+
+        operations.push({
+          rowId: item.row.id,
+          rootId: item.row.rootId,
+          skillName: item.row.name,
+          action
+        });
+        return;
+      }
+
+      if (item.row.recommendedAction) {
+        operations.push({
+          rowId: item.row.id,
+          rootId: item.row.rootId,
+          skillName: item.row.name,
+          action: item.row.recommendedAction
+        });
+      }
+    });
+
+    return { unresolved, operations };
+  }
+
+  function syncRows(rows: SkillListRow[]) {
     if (!repoUrl.trim()) {
       setNotes((current) => current.concat(messages.repoRequiredAlert));
       return;
@@ -626,64 +851,67 @@ export function useSkillSyncState(preferences: AppPreferences) {
       return;
     }
 
-    const selectedRows = selectedRowsList();
-    const unresolved = selectedRows.filter(
-      (item) => needsReview(item.row) && reviewDecisions[item.row.id] === undefined
-    );
+    if (!rows.length) {
+      setNotes((current) => current.concat(messages.nothingSelectedNote));
+      return;
+    }
+
+    const { unresolved, operations } = buildOperationsForRows(rows);
 
     if (unresolved.length > 0) {
       setSelectedRowId(unresolved[0].row.id);
+      setSelectedIds(new Set(rows.map((item) => item.row.id)));
       setNotes((current) =>
         current.concat(messages.reviewRequiredNote(unresolved.length))
       );
       return;
     }
 
-    const operations: SyncOperation[] = [];
-
-    selectedRows.forEach((item) => {
-      if (needsReview(item.row)) {
-        const decision = reviewDecisions[item.row.id];
-        if (!decision || decision === "skip") {
-          return;
-        }
-        operations.push({
-          rowId: item.row.id,
-          rootId: item.row.rootId,
-          skillName: item.row.name,
-          action: decision
-        });
-        return;
-      }
-
-      if (item.row.recommendedAction) {
-        operations.push({
-          rowId: item.row.id,
-          rootId: item.row.rootId,
-          skillName: item.row.name,
-          action: item.row.recommendedAction
-        });
-      }
-    });
-
     startSync(() => {
       void runSync(operations);
     });
   }
 
+  function syncSelected() {
+    syncRows(selectedRowsList());
+  }
+
+  function syncSuggested() {
+    setSelectedIds(new Set(rowsNeedingAction.map((item) => item.row.id)));
+    syncRows(rowsNeedingAction);
+  }
+
   function refresh() {
     startRefresh(() => {
-      void loadAll(undefined, repoUrl, selectedOwner);
+      void loadAll(undefined, repoUrl, selectedOwner, "refresh");
     });
   }
 
   const recentNotes = notes.slice(-8).reverse();
-  const selectedCount = selectedIds.size;
-  const visibleSelectedCount = filteredRows.filter((item) => selectedIds.has(item.row.id)).length;
+  const selectedCount = unignoredRows.filter((item) => selectedIds.has(item.row.id)).length;
+  const selectableVisibleCount = filteredRows.filter(
+    (item) => !ignoredSkillIds[item.row.id]
+  ).length;
+  const visibleSelectedCount = filteredRows.filter(
+    (item) => !ignoredSkillIds[item.row.id] && selectedIds.has(item.row.id)
+  ).length;
   const allVisibleSelected =
-    filteredRows.length > 0 && visibleSelectedCount === filteredRows.length;
+    selectableVisibleCount > 0 && visibleSelectedCount === selectableVisibleCount;
   const canSync =
-    Boolean(repoUrl.trim()) && !repoUrlError && !syncBlockedByPermission;
+    Boolean(repoUrl.trim()) && !repoUrlError && !syncBlockedByPermission && !remoteLoadError;
+  const firstBackupRecommended = isFirstBackupRecommended({
+    repoUrl,
+    repoUrlError,
+    localSkillCount,
+    remoteSkillCount
+  });
+  const onboardingStep = resolveOnboardingStep({
+    dismissed: onboardingDismissed,
+    repoUrl,
+    repoUrlError,
+    localSkillCount,
+    remoteSkillCount
+  });
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -733,13 +961,29 @@ export function useSkillSyncState(preferences: AppPreferences) {
     selectedOwner,
     chooseOwner,
     chooseRepository,
+    createDefaultRepository,
+    creatingRepository,
+    defaultRepositoryName: DEFAULT_GITHUB_REPOSITORY_NAME,
     selectedRepository,
     selectedPermission,
-    loadingRepositories,
+    loadingRepositories: loadingRepositories || loadIntent === "repository",
+    loadIntent,
+    startupLoading: loadIntent === "startup",
+    checking:
+      loadIntent === "startup" ||
+      loadIntent === "refresh" ||
+      loadIntent === "repository",
     repositoryLoadError,
+    remoteLoadError,
     filter,
     setFilter,
     counts,
+    ignoredSkillIds,
+    ignoredCount,
+    localSkillCount,
+    remoteSkillCount,
+    rowsNeedingAction,
+    reviewRequiredCount,
     allRows,
     filteredRows,
     selectedIds,
@@ -760,12 +1004,21 @@ export function useSkillSyncState(preferences: AppPreferences) {
     recentNotes,
     reviewDecisions,
     setReviewDecision,
+    ignoreSkill,
+    restoreIgnoredSkill,
     syncSelected,
+    syncSuggested,
     refresh,
-    refreshing,
+    refreshing: refreshing || loadIntent === "refresh",
     syncing,
     canSync,
     syncBlockedByPermission,
+    onboardingDismissed,
+    setOnboardingDismissed,
+    onboardingStep,
+    firstBackupRecommended,
+    showAdvancedDetails,
+    setShowAdvancedDetails,
     defaultInstallRoots: readDefaultInstallRoots()
   };
 }

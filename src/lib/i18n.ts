@@ -443,22 +443,22 @@ export function getMessages(language: Language) {
 export function formatStateLabel(language: Language, state: SyncState) {
   const labels: Record<Language, Record<SyncState, string>> = {
     en: {
-      "in-sync": "In Sync",
-      "only-local": "Unsynced",
-      "only-remote": "Unsynced",
-      "local-changed": "Local Version Is Newer",
-      "remote-changed": "Remote Version Is Newer",
-      conflict: "Needs Attention",
-      "pending-delete": "Unsynced"
+      "in-sync": "Synced",
+      "only-local": "Only on this Mac",
+      "only-remote": "Only on GitHub",
+      "local-changed": "This Mac is newer",
+      "remote-changed": "GitHub is newer",
+      conflict: "Changed in both places",
+      "pending-delete": "Possibly deleted"
     },
     "zh-CN": {
       "in-sync": "已同步",
-      "only-local": "未同步",
-      "only-remote": "未同步",
-      "local-changed": "本地版本较新",
-      "remote-changed": "远端版本较新",
-      conflict: "需要处理",
-      "pending-delete": "未同步"
+      "only-local": "仅在这台 Mac",
+      "only-remote": "仅在 GitHub",
+      "local-changed": "这台 Mac 较新",
+      "remote-changed": "GitHub 较新",
+      conflict: "两边都改过",
+      "pending-delete": "可能已删除"
     }
   };
 
@@ -468,18 +468,22 @@ export function formatStateLabel(language: Language, state: SyncState) {
 export function formatActionLabel(language: Language, action: SyncOperationType) {
   const labels: Record<Language, Record<SyncOperationType, string>> = {
     en: {
-      push: "Sync local to remote",
-      pull: "Sync remote to local",
-      "delete-local": "Delete local copy",
-      "delete-remote": "Delete remote copy",
-      "restore-local": "Restore local copy"
+      push: "Upload this Mac's version",
+      pull: "Download GitHub version",
+      "delete-local": "Delete from this Mac",
+      "delete-remote": "Delete from GitHub",
+      "restore-local": "Restore to this Mac",
+      "ignore-remote": "Move to ignored",
+      unignore: "Remove from ignored"
     },
     "zh-CN": {
-      push: "本地同步到远端",
-      pull: "远端同步到本地",
-      "delete-local": "删除本地副本",
-      "delete-remote": "删除远端副本",
-      "restore-local": "恢复本地副本"
+      push: "上传本机版本",
+      pull: "下载 GitHub 版本",
+      "delete-local": "删除这台 Mac 的副本",
+      "delete-remote": "删除 GitHub 副本",
+      "restore-local": "恢复到这台 Mac",
+      "ignore-remote": "移入不跟踪",
+      unignore: "从不跟踪移除"
     }
   };
 

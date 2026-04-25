@@ -86,7 +86,8 @@ export function fallbackRemoteSnapshot(
         }
       ]
     })),
-    notes: ["Remote data is mocked in fallback mode."]
+    notes: ["Remote data is mocked in fallback mode."],
+    ignoredSkillIds: {}
   };
 }
 
@@ -96,7 +97,8 @@ export function fallbackSyncResult(operations: SyncOperation[]): SyncResult {
     notes: [
       `Fallback sync simulated ${operations.length} selected item(s). No filesystem changes were made.`
     ],
-    syncedRowIds: operations.map((operation) => operation.rowId)
+    syncedRowIds: operations.map((operation) => operation.rowId),
+    ignoredSkillIds: {}
   };
 }
 

@@ -92,3 +92,10 @@ export async function validateGitHubRepository(input: {
 }) {
   return safeInvoke<GitHubRepositoryValidation>("github_validate_repository", { input });
 }
+
+export async function createGitHubRepository(input: {
+  name: string;
+  private: boolean;
+}) {
+  return safeInvoke<GitHubRepositoryValidation>("github_create_repository", { input });
+}
