@@ -2,6 +2,7 @@ import type {
   AppPreferences,
   BuiltInRootOverride,
   DefaultInstallRoots,
+  IgnoredSkillEntries,
   KnownSyncedEntries,
   Language,
   SkillRootConfig
@@ -11,10 +12,12 @@ export const CUSTOM_ROOTS_KEY = "skill-sync/custom-roots";
 export const BUILT_IN_ROOT_OVERRIDES_KEY = "skill-sync/built-in-root-overrides";
 export const REPO_URL_KEY = "skill-sync/repo-url";
 export const SYNCED_IDS_KEY = "skill-sync/known-synced-ids";
+export const IGNORED_SKILL_IDS_KEY = "skill-sync/ignored-skill-ids";
 export const DEFAULT_INSTALL_ROOTS_KEY = "skill-sync/default-install-roots";
 export const LANGUAGE_KEY = "skill-sync/language";
 export const PREFERENCES_KEY = "skill-sync/preferences";
 export const LAST_GITHUB_OWNER_KEY = "skill-sync/github-last-owner";
+export const ONBOARDING_DISMISSED_KEY = "skill-sync/onboarding-dismissed";
 
 export const DEFAULT_PREFERENCES: AppPreferences = {
   language: "en",
@@ -118,7 +121,7 @@ export function writeRepoUrl(repoUrl: string) {
   window.localStorage.setItem(REPO_URL_KEY, repoUrl);
 }
 
-export function readKnownSyncedIds() {
+export function readKnownSyncedIds(): KnownSyncedEntries {
   const stored = readJson<KnownSyncedEntries | string[]>(SYNCED_IDS_KEY, []);
   if (Array.isArray(stored)) {
     return Object.fromEntries(stored.map((id) => [id, true])) as KnownSyncedEntries;
@@ -128,6 +131,26 @@ export function readKnownSyncedIds() {
 
 export function writeKnownSyncedIds(entries: KnownSyncedEntries) {
   writeJson(SYNCED_IDS_KEY, entries);
+}
+
+export function readIgnoredSkillIds(): IgnoredSkillEntries {
+  const stored = readJson<IgnoredSkillEntries | string[]>(IGNORED_SKILL_IDS_KEY, {});
+  if (Array.isArray(stored)) {
+    return Object.fromEntries(stored.map((id) => [id, true])) as IgnoredSkillEntries;
+  }
+  return stored;
+}
+
+export function writeIgnoredSkillIds(entries: IgnoredSkillEntries) {
+  writeJson(IGNORED_SKILL_IDS_KEY, entries);
+}
+
+export function readOnboardingDismissed() {
+  return readJson<boolean>(ONBOARDING_DISMISSED_KEY, false);
+}
+
+export function writeOnboardingDismissed(value: boolean) {
+  writeJson(ONBOARDING_DISMISSED_KEY, value);
 }
 
 export function readDefaultInstallRoots() {

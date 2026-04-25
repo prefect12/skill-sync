@@ -1,6 +1,6 @@
 [package]
 name = "skill-sync-mac"
-version = "0.1.0"
+version = "0.1.1"
 description = "Visual skill root synchronization for Codex and Claude"
 authors = ["kadewu"]
 edition = "2021"
