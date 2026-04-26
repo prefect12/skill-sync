@@ -77,6 +77,7 @@ import type {
   RemoteRootSnapshot,
   SkillDiffPayload,
   SkillListRow,
+  SkillRow,
   SkillRootConfig,
   SyncOperation,
   SyncState
@@ -119,6 +120,10 @@ function matchesFilter(state: SyncState, filter: Exclude<MainFilter, "ignored">)
     default:
       return true;
   }
+}
+
+function hasSyncAction(row: SkillRow) {
+  return Boolean(row.recommendedAction) || needsReview(row);
 }
 
 function createLoadLogger(label: string) {
@@ -410,6 +415,10 @@ export function useSkillSyncState(preferences: AppPreferences) {
         return allRows.filter((item) => ignoredSkillIds[item.row.id]);
       }
 
+      if (filter === "actionable") {
+        return unignoredRows.filter((item) => hasSyncAction(item.row));
+      }
+
       return unignoredRows.filter((item) => matchesFilter(item.row.state, filter));
     },
     [allRows, filter, ignoredSkillIds, unignoredRows]
@@ -539,7 +548,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
       ignored: ignoredCount,
       actionable: remoteLoadError
         ? 0
-        : unignoredRows.filter((item) => matchesFilter(item.row.state, "actionable")).length,
+        : unignoredRows.filter((item) => hasSyncAction(item.row)).length,
       changed: remoteLoadError
         ? 0
         : unignoredRows.filter((item) => matchesFilter(item.row.state, "changed")).length,
@@ -556,7 +565,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
     () =>
       remoteLoadError
         ? []
-        : unignoredRows.filter((item) => item.row.state !== "in-sync"),
+        : unignoredRows.filter((item) => hasSyncAction(item.row)),
     [remoteLoadError, unignoredRows]
   );
   const reviewRequiredCount = useMemo(
@@ -625,7 +634,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
     return unignoredRows.filter((item) => selectedIds.has(item.row.id));
   }
 
-  function syncTrackingRule(rowId: string, action: "ignore-remote" | "unignore") {
+  function syncTrackingRules(rowIds: string[], action: "ignore-remote" | "unignore") {
     if (!repoUrl.trim()) {
       setNotes((current) => current.concat(messages.repoRequiredAlert));
       return;
@@ -646,37 +655,48 @@ export function useSkillSyncState(preferences: AppPreferences) {
       return;
     }
 
-    const item = allRows.find((candidate) => candidate.row.id === rowId);
-    if (!item) {
-      setNotes((current) => current.concat(`Cannot find skill row: ${rowId}`));
+    const rowIdSet = new Set(rowIds);
+    const items = allRows.filter((candidate) => rowIdSet.has(candidate.row.id));
+    if (!items.length) {
+      setNotes((current) => current.concat("No skill rows were selected for this tracking update."));
       return;
     }
 
     setSelectedIds((current) => {
       const next = new Set(current);
-      next.delete(rowId);
+      items.forEach((item) => next.delete(item.row.id));
       return next;
     });
     setReviewDecisions((current) => {
       const next = { ...current };
-      delete next[rowId];
+      items.forEach((item) => {
+        delete next[item.row.id];
+      });
       return next;
     });
 
     startSync(() => {
-      void runSync([
-        {
+      void runSync(
+        items.map((item) => ({
           rowId: item.row.id,
           rootId: item.row.rootId,
           skillName: item.row.name,
           action
-        }
-      ]);
+        }))
+      );
     });
+  }
+
+  function syncTrackingRule(rowId: string, action: "ignore-remote" | "unignore") {
+    syncTrackingRules([rowId], action);
   }
 
   function ignoreSkill(rowId: string) {
     syncTrackingRule(rowId, "ignore-remote");
+  }
+
+  function ignoreSkills(rowIds: string[]) {
+    syncTrackingRules(rowIds, "ignore-remote");
   }
 
   function restoreIgnoredSkill(rowId: string) {
@@ -1005,6 +1025,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
     reviewDecisions,
     setReviewDecision,
     ignoreSkill,
+    ignoreSkills,
     restoreIgnoredSkill,
     syncSelected,
     syncSuggested,
