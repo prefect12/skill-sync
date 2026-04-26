@@ -70,6 +70,15 @@ describe("status helpers", () => {
             modifiedAtMs: 10,
             contentHash: "only-local",
             isSymlink: false
+          },
+          {
+            id: "codex-home:epsilon",
+            rootId: ROOT.id,
+            name: "epsilon",
+            path: "/tmp/epsilon",
+            modifiedAtMs: 10,
+            contentHash: "local-old",
+            isSymlink: false
           }
         ])
       ],
@@ -98,6 +107,14 @@ describe("status helpers", () => {
             repoPath: "roots/codex-home/gamma",
             modifiedAtMs: 40,
             contentHash: "remote-new"
+          },
+          {
+            id: "codex-home:epsilon",
+            rootId: ROOT.id,
+            name: "epsilon",
+            repoPath: "roots/codex-home/epsilon",
+            modifiedAtMs: 30,
+            contentHash: "remote-new"
           }
         ])
       ],
@@ -107,8 +124,12 @@ describe("status helpers", () => {
     const rows = Object.fromEntries(groups[0].rows.map((row) => [row.name, row]));
     expect(rows.alpha.state).toBe("in-sync");
     expect(rows.beta.state).toBe("local-changed");
+    expect(rows.beta.recommendedAction).toBe("push");
     expect(rows.gamma.state).toBe("only-remote");
+    expect(rows.gamma.recommendedAction).toBe("pull");
     expect(rows.delta.state).toBe("pending-delete");
+    expect(rows.epsilon.state).toBe("remote-changed");
+    expect(rows.epsilon.recommendedAction).toBe("pull");
   });
 
   it("flags only conflict and pending delete rows for review", () => {

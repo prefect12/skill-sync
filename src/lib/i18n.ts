@@ -445,7 +445,7 @@ export function formatStateLabel(language: Language, state: SyncState) {
     en: {
       "in-sync": "Synced",
       "only-local": "Only on this Mac",
-      "only-remote": "Only on GitHub",
+      "only-remote": "On GitHub, missing here",
       "local-changed": "This Mac is newer",
       "remote-changed": "GitHub is newer",
       conflict: "Changed in both places",
@@ -453,8 +453,8 @@ export function formatStateLabel(language: Language, state: SyncState) {
     },
     "zh-CN": {
       "in-sync": "已同步",
-      "only-local": "仅在这台 Mac",
-      "only-remote": "仅在 GitHub",
+      "only-local": "本机有，GitHub 没有",
+      "only-remote": "GitHub 有，本机没有",
       "local-changed": "这台 Mac 较新",
       "remote-changed": "GitHub 较新",
       conflict: "两边都改过",
@@ -468,8 +468,8 @@ export function formatStateLabel(language: Language, state: SyncState) {
 export function formatActionLabel(language: Language, action: SyncOperationType) {
   const labels: Record<Language, Record<SyncOperationType, string>> = {
     en: {
-      push: "Upload this Mac's version",
-      pull: "Download GitHub version",
+      push: "Upload to GitHub",
+      pull: "Download to this Mac",
       "delete-local": "Delete from this Mac",
       "delete-remote": "Delete from GitHub",
       "restore-local": "Restore to this Mac",
@@ -477,8 +477,8 @@ export function formatActionLabel(language: Language, action: SyncOperationType)
       unignore: "Remove from ignored"
     },
     "zh-CN": {
-      push: "上传本机版本",
-      pull: "下载 GitHub 版本",
+      push: "上传到 GitHub",
+      pull: "下载到这台 Mac",
       "delete-local": "删除这台 Mac 的副本",
       "delete-remote": "删除 GitHub 副本",
       "restore-local": "恢复到这台 Mac",

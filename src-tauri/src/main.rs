@@ -1132,6 +1132,67 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn backup_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn backup_local_skill(path: &Path, root_id: &str, skill_name: &str) -> Result<Option<PathBuf>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let backup_root = home_dir()?.join("Library/Application Support/SkillSync/backups");
+    fs::create_dir_all(&backup_root)
+        .map_err(|error| format!("Failed to create backup root {}: {error}", backup_root.display()))?;
+
+    let backup_path = backup_root.join(format!(
+        "{}-{}-{}",
+        system_time_to_ms(SystemTime::now()),
+        backup_component(root_id),
+        backup_component(skill_name)
+    ));
+
+    copy_dir_recursive(path, &backup_path)?;
+    Ok(Some(backup_path))
+}
+
+fn replace_local_skill_from_remote(
+    remote_skill_dir: &Path,
+    local_target_dir: &Path,
+    root_id: &str,
+    skill_name: &str,
+) -> Result<Option<PathBuf>, String> {
+    if let Some(parent) = local_target_dir.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!("Failed to create local parent {}: {error}", parent.display())
+        })?;
+    }
+
+    let backup_path = backup_local_skill(local_target_dir, root_id, skill_name)?;
+    if local_target_dir.exists() {
+        remove_path_if_exists(local_target_dir)?;
+    }
+
+    if let Err(error) = copy_dir_recursive(remote_skill_dir, local_target_dir) {
+        if let Some(backup_path) = &backup_path {
+            let _ = remove_path_if_exists(local_target_dir);
+            let _ = copy_dir_recursive(backup_path, local_target_dir);
+        }
+        return Err(error);
+    }
+
+    Ok(backup_path)
+}
+
 fn find_root<'a>(roots: &'a [SkillRootConfig], root_id: &str) -> Result<&'a SkillRootConfig, String> {
     roots.iter()
         .find(|root| root.id == root_id)
@@ -1769,13 +1830,17 @@ fn sync_selected_items_impl(
                     ));
                 }
                 let local_target_dir = local_write_path(&local_skill_dir)?;
-                if let Some(parent) = local_target_dir.parent() {
-                    fs::create_dir_all(parent).map_err(|error| {
-                        format!("Failed to create local parent {}: {error}", parent.display())
-                    })?;
+                if let Some(backup_path) = replace_local_skill_from_remote(
+                    &remote_skill_dir,
+                    &local_target_dir,
+                    &operation.root_id,
+                    &operation.skill_name,
+                )? {
+                    notes.push(format!(
+                        "Backed up previous local skill before GitHub update: {}",
+                        backup_path.display()
+                    ));
                 }
-                remove_path_if_exists(&local_target_dir)?;
-                copy_dir_recursive(&remote_skill_dir, &local_target_dir)?;
                 synced.push(operation.row_id.clone());
             }
             "delete-remote" => {
@@ -1794,9 +1859,7 @@ fn sync_selected_items_impl(
                 }
             }
             "delete-local" => {
-                let local_target_dir = local_write_path(&local_skill_dir)?;
-                remove_path_if_exists(&local_target_dir)?;
-                synced.push(operation.row_id.clone());
+                return Err("Refusing to delete local skills.".into());
             }
             "restore-local" => {
                 if !remote_skill_dir.exists() {
@@ -1806,8 +1869,17 @@ fn sync_selected_items_impl(
                     ));
                 }
                 let local_target_dir = local_write_path(&local_skill_dir)?;
-                remove_path_if_exists(&local_target_dir)?;
-                copy_dir_recursive(&remote_skill_dir, &local_target_dir)?;
+                if let Some(backup_path) = replace_local_skill_from_remote(
+                    &remote_skill_dir,
+                    &local_target_dir,
+                    &operation.root_id,
+                    &operation.skill_name,
+                )? {
+                    notes.push(format!(
+                        "Backed up previous local skill before GitHub restore: {}",
+                        backup_path.display()
+                    ));
+                }
                 synced.push(operation.row_id.clone());
             }
             other => return Err(format!("Unsupported sync action: {other}")),

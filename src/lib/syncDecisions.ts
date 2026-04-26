@@ -12,7 +12,7 @@ export function getReviewDecisionActions(row: SkillRow): ReviewDecision[] {
   }
 
   if (row.local && !row.remote) {
-    return ["push", "delete-local", "skip"];
+    return ["push", "skip"];
   }
 
   if (!row.local && row.remote) {

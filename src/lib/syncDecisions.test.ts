@@ -16,7 +16,7 @@ function row(patch: Partial<SkillRow>): SkillRow {
 }
 
 describe("sync decision helpers", () => {
-  it("maps local-only pending deletes to upload, delete local, or skip", () => {
+  it("maps local-only pending deletes to upload or skip", () => {
     const pending = row({
       state: "pending-delete",
       local: {
@@ -30,8 +30,9 @@ describe("sync decision helpers", () => {
       }
     });
 
-    expect(getReviewDecisionActions(pending)).toEqual(["push", "delete-local", "skip"]);
+    expect(getReviewDecisionActions(pending)).toEqual(["push", "skip"]);
     expect(syncActionFromReviewDecision(pending, "pull")).toBeUndefined();
+    expect(syncActionFromReviewDecision(pending, "delete-local")).toBeUndefined();
   });
 
   it("maps remote-only pending deletes to restore, delete remote, or skip", () => {
@@ -53,6 +54,7 @@ describe("sync decision helpers", () => {
       "skip"
     ]);
     expect(syncActionFromReviewDecision(pending, "push")).toBeUndefined();
+    expect(syncActionFromReviewDecision(pending, "restore-local")).toBe("restore-local");
   });
 
   it("keeps conflicts limited to choosing local, GitHub, or skip", () => {

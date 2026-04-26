@@ -16,6 +16,7 @@ import {
   Trash2,
   X
 } from "lucide-react";
+import { useState } from "react";
 import { AppBrand } from "./AppBrand";
 import { formatActionLabel, formatStateLabel, getMessages } from "../lib/i18n";
 import { SkillDiffPanel } from "./SkillDiffPanel";
@@ -128,12 +129,15 @@ function homeCopy(language: Language) {
       ignoreSkill: "不再同步",
       ignoreSkillCopy: "会写入 GitHub 不跟踪清单；如果 GitHub 有副本，会删除 GitHub 副本，本机文件保留。",
       moveToIgnored: "移入不跟踪",
+      bulkMoveToIgnored: (count: number) => `移入不跟踪（${count}）`,
       removeFromIgnored: "移除",
       removeFromIgnoredTitle: "从不跟踪列表移除",
       ignoreRemoteConfirm: (name: string) =>
         `将“${name}”移入不跟踪？\n\n这会写入 GitHub 仓库的 .skillsync/ignored-skills.json，并删除 GitHub 上这个 skill 的副本。本机文件不会删除。`,
       ignoreLocalConfirm: (name: string) =>
         `将“${name}”移入不跟踪？\n\n这会写入 GitHub 仓库的 .skillsync/ignored-skills.json。当前 GitHub 没有这个 skill 副本，所以不会删除文件。`,
+      ignoreBulkConfirm: (count: number) =>
+        `将已选的 ${count} 个 skill 移入不跟踪？\n\n这会写入 GitHub 仓库的 .skillsync/ignored-skills.json；如果 GitHub 有对应副本，会删除 GitHub 副本。本机文件不会删除。`,
       restoreSkill: "恢复同步",
       restoreSkillCopy: "恢复后会重新出现在需要同步或需要确认的列表里。",
       ignoredListCopy: "这里是已标记为不跟踪的 skills；点“移除”即可重新纳入同步。",
@@ -224,12 +228,15 @@ function homeCopy(language: Language) {
     ignoreSkill: "Do not sync",
     ignoreSkillCopy: "Writes this to the GitHub ignored list. If GitHub has a copy, the GitHub copy is deleted while local files are kept.",
     moveToIgnored: "Move to ignored",
+    bulkMoveToIgnored: (count: number) => `Move to ignored (${count})`,
     removeFromIgnored: "Remove",
     removeFromIgnoredTitle: "Remove from ignored list",
     ignoreRemoteConfirm: (name: string) =>
       `Move "${name}" to ignored?\n\nThis writes .skillsync/ignored-skills.json in the GitHub repository and deletes this skill's GitHub copy. Local files are kept.`,
     ignoreLocalConfirm: (name: string) =>
       `Move "${name}" to ignored?\n\nThis writes .skillsync/ignored-skills.json in the GitHub repository. GitHub has no copy of this skill right now, so no files are deleted.`,
+    ignoreBulkConfirm: (count: number) =>
+      `Move ${count} selected skills to ignored?\n\nThis writes .skillsync/ignored-skills.json in the GitHub repository. If GitHub has matching copies, those GitHub copies are deleted. Local files are kept.`,
     restoreSkill: "Restore sync",
     restoreSkillCopy: "After restoring, this skill can appear again when it needs sync or review.",
     ignoredListCopy: "These skills are marked as not syncing. Use Remove to include one again.",
@@ -347,10 +354,10 @@ function sourceSummary(language: Language, row: SkillRow) {
       return "本机和 GitHub 都有副本";
     }
     if (row.local) {
-      return "只在这台 Mac 上";
+      return "本机有，GitHub 没有";
     }
     if (row.remote) {
-      return "只在 GitHub 上";
+      return "GitHub 有，本机没有";
     }
     return "等待确认";
   }
@@ -362,19 +369,24 @@ function sourceSummary(language: Language, row: SkillRow) {
     return "Only on this Mac";
   }
   if (row.remote) {
-    return "Only on GitHub";
+    return "On GitHub, missing here";
   }
   return "Needs review";
 }
 
 function isTechnicalActivityNote(note: string) {
+  const normalized = note.trim();
+
   return (
-    note.startsWith("Reload: ") ||
-    note.startsWith("Startup: ") ||
-    note.startsWith("Loaded remote snapshot from ") ||
-    note.startsWith("Project root scan base does not exist yet:") ||
-    note.startsWith("Error: Failed to update GitHub repository") ||
-    note.startsWith("Failed to update GitHub repository")
+    normalized.startsWith("Reload: ") ||
+    normalized.startsWith("Startup: ") ||
+    normalized.startsWith("Loaded remote snapshot from ") ||
+    normalized.startsWith("Project root scan base does not exist yet:") ||
+    normalized.startsWith("Error: Failed to update GitHub repository") ||
+    normalized.startsWith("Failed to update GitHub repository") ||
+    normalized.startsWith("Error: github.com ") ||
+    normalized.includes("Failed to log in to github.com account") ||
+    normalized.includes("To forget about this account, run: gh auth logout")
   );
 }
 
@@ -382,6 +394,7 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
   const state = useSkillSyncState(preferences);
   const messages = getMessages(preferences.language);
   const copy = homeCopy(preferences.language);
+  const [pendingIgnoredRows, setPendingIgnoredRows] = useState<SkillRow[]>([]);
   const selectedItem = state.selectedItem;
   const selectedRow = selectedItem?.row;
   const selectedRoot = selectedItem?.root;
@@ -405,6 +418,9 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
   const technicalNotes = state.recentNotes.filter(isTechnicalActivityNote);
   const showTechnicalActivity =
     state.showAdvancedDetails || preferences.showTechnicalActivity;
+  const selectedRowsForTracking = state.allRows
+    .filter((item) => state.selectedIds.has(item.row.id) && !state.ignoredSkillIds[item.row.id])
+    .map((item) => item.row);
   const statusMessage = state.syncing
     ? copy.statusSyncing
     : state.refreshing
@@ -419,11 +435,31 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
               ? copy.statusNeedsWork(suggestedCount)
               : copy.statusReady;
 
-  function confirmMoveToIgnored(row: SkillRow) {
-    const message = row.remote
-      ? copy.ignoreRemoteConfirm(row.name)
-      : copy.ignoreLocalConfirm(row.name);
-    return window.confirm(message);
+  function moveToIgnoredMessage(rows: SkillRow[]) {
+    if (rows.length === 1) {
+      const row = rows[0];
+      return row.remote ? copy.ignoreRemoteConfirm(row.name) : copy.ignoreLocalConfirm(row.name);
+    }
+
+    return copy.ignoreBulkConfirm(rows.length);
+  }
+
+  function requestMoveToIgnored(rows: SkillRow | SkillRow[]) {
+    const nextRows = Array.isArray(rows) ? rows : [rows];
+    if (!nextRows.length) {
+      return;
+    }
+
+    setPendingIgnoredRows(nextRows);
+  }
+
+  function confirmMoveToIgnored() {
+    if (!pendingIgnoredRows.length) {
+      return;
+    }
+
+    state.ignoreSkills(pendingIgnoredRows.map((row) => row.id));
+    setPendingIgnoredRows([]);
   }
 
   return (
@@ -654,14 +690,25 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
                 <h2>{copy.listTitle}</h2>
                 <p>{state.filter === "ignored" ? copy.ignoredListCopy : copy.listCopy}</p>
               </div>
-              <label className="select-all compact-select-all">
-                <input
-                  type="checkbox"
-                  checked={state.allVisibleSelected}
-                  onChange={(event) => state.selectAllVisible(event.target.checked)}
-                />
-                <span>{copy.selectAll}</span>
-              </label>
+              <div className="finder-pane-actions">
+                <button
+                  className="secondary-button compact-button"
+                  type="button"
+                  disabled={state.syncing || selectedRowsForTracking.length === 0}
+                  onClick={() => requestMoveToIgnored(selectedRowsForTracking)}
+                >
+                  <X />
+                  {copy.bulkMoveToIgnored(selectedRowsForTracking.length)}
+                </button>
+                <label className="select-all compact-select-all">
+                  <input
+                    type="checkbox"
+                    checked={state.allVisibleSelected}
+                    onChange={(event) => state.selectAllVisible(event.target.checked)}
+                  />
+                  <span>{copy.selectAll}</span>
+                </label>
+              </div>
             </div>
 
             <div className="filter-bar finder-filter-bar" role="tablist" aria-label="filters">
@@ -731,15 +778,7 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
                     <div
                       key={item.row.id}
                       className={`finder-row${active ? " active" : ""}${ignored ? " ignored" : ""}`}
-                      role="button"
-                      tabIndex={0}
                       onClick={() => state.setSelectedSkill(item.row.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          state.setSelectedSkill(item.row.id);
-                        }
-                      }}
                     >
                       <label
                         className="skill-check"
@@ -763,26 +802,6 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
                         {formatStateLabel(preferences.language, item.row.state)}
                       </span>
                       <span className="finder-row-action">{action}</span>
-                      <button
-                        className="row-track-button"
-                        type="button"
-                        disabled={state.syncing}
-                        title={ignored ? copy.removeFromIgnoredTitle : copy.moveToIgnored}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (ignored) {
-                            state.restoreIgnoredSkill(item.row.id);
-                            return;
-                          }
-                          if (!confirmMoveToIgnored(item.row)) {
-                            return;
-                          }
-                          state.ignoreSkill(item.row.id);
-                        }}
-                      >
-                        {ignored ? <RotateCcw /> : <X />}
-                        <span>{ignored ? copy.removeFromIgnored : copy.moveToIgnored}</span>
-                      </button>
                     </div>
                   );
                 })
@@ -862,9 +881,7 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
                       onClick={() =>
                         selectedIgnored
                           ? state.restoreIgnoredSkill(selectedRow.id)
-                          : confirmMoveToIgnored(selectedRow)
-                            ? state.ignoreSkill(selectedRow.id)
-                            : undefined
+                          : requestMoveToIgnored(selectedRow)
                       }
                     >
                       {selectedIgnored ? <RotateCcw /> : <X />}
@@ -977,6 +994,43 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
           </>
         )}
       </main>
+      {pendingIgnoredRows.length ? (
+        <div className="confirm-backdrop" role="presentation">
+          <section
+            className="confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="move-to-ignored-title"
+          >
+            <div className="confirm-dialog-icon">
+              <AlertTriangle />
+            </div>
+            <div className="confirm-dialog-copy">
+              <h2 id="move-to-ignored-title">{copy.moveToIgnored}</h2>
+              <p>{moveToIgnoredMessage(pendingIgnoredRows)}</p>
+            </div>
+            <div className="confirm-dialog-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setPendingIgnoredRows([])}
+              >
+                {messages.reviewCancel}
+              </button>
+              <button
+                className="danger-button"
+                type="button"
+                disabled={state.syncing}
+                onClick={confirmMoveToIgnored}
+              >
+                {pendingIgnoredRows.length > 1
+                  ? copy.bulkMoveToIgnored(pendingIgnoredRows.length)
+                  : copy.moveToIgnored}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
