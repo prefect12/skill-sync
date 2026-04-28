@@ -91,6 +91,12 @@ export type MainFilter =
   | "ignored"
   | "all";
 type LoadIntent = "startup" | "refresh" | "repository" | "sync";
+type SyncNotice = {
+  id: number;
+  status: "success" | "error";
+  operationCount: number;
+  detail?: string;
+};
 
 const FALLBACK_GITHUB_STATUS: GitHubStatus = {
   cliAvailable: false,
@@ -172,8 +178,9 @@ export function useSkillSyncState(preferences: AppPreferences) {
   const [diffErrorByKey, setDiffErrorByKey] = useState<Record<string, string>>({});
   const [selectedDiffFilePath, setSelectedDiffFilePath] = useState("");
   const [loadIntent, setLoadIntent] = useState<LoadIntent | null>("startup");
+  const [syncing, setSyncing] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<SyncNotice | null>(null);
   const [refreshing, startRefresh] = useTransition();
-  const [syncing, startSync] = useTransition();
   const [loadingRepositories, startRepositoryLoad] = useTransition();
 
   function clearCompareState() {
@@ -232,7 +239,12 @@ export function useSkillSyncState(preferences: AppPreferences) {
         try {
           nextValidation = await validateGitHubRepository({ repoUrl: localRepoUrl });
         } catch (error) {
-          nextRepoError = String(error);
+          nextValidation = parseGitHubRepositoryUrl(localRepoUrl);
+          if (!nextValidation) {
+            nextRepoError = messages.repoUrlInvalidNote;
+          } else {
+            nextNotes.push(String(error));
+          }
         }
       }
     } else {
@@ -635,6 +647,10 @@ export function useSkillSyncState(preferences: AppPreferences) {
   }
 
   function syncTrackingRules(rowIds: string[], action: "ignore-remote" | "unignore") {
+    if (syncing) {
+      return;
+    }
+
     if (!repoUrl.trim()) {
       setNotes((current) => current.concat(messages.repoRequiredAlert));
       return;
@@ -675,16 +691,14 @@ export function useSkillSyncState(preferences: AppPreferences) {
       return next;
     });
 
-    startSync(() => {
-      void runSync(
-        items.map((item) => ({
-          rowId: item.row.id,
-          rootId: item.row.rootId,
-          skillName: item.row.name,
-          action
-        }))
-      );
-    });
+    void runSync(
+      items.map((item) => ({
+        rowId: item.row.id,
+        rootId: item.row.rootId,
+        skillName: item.row.name,
+        action
+      }))
+    );
   }
 
   function syncTrackingRule(rowId: string, action: "ignore-remote" | "unignore") {
@@ -788,6 +802,9 @@ export function useSkillSyncState(preferences: AppPreferences) {
       return;
     }
 
+    setSyncing(true);
+    setSyncNotice(null);
+
     try {
       const result = await syncSelectedItems(repoUrl, rootConfigs, operations);
       setRemoteSnapshots((current) =>
@@ -813,8 +830,22 @@ export function useSkillSyncState(preferences: AppPreferences) {
       );
       setKnownSyncedIds(nextSynced);
       writeKnownSyncedIds(nextSynced);
+      setSyncNotice({
+        id: Date.now(),
+        status: "success",
+        operationCount: operations.length
+      });
     } catch (error) {
-      setNotes((current) => current.concat(String(error)));
+      const detail = String(error);
+      setNotes((current) => current.concat(detail));
+      setSyncNotice({
+        id: Date.now(),
+        status: "error",
+        operationCount: operations.length,
+        detail
+      });
+    } finally {
+      setSyncing(false);
     }
   }
 
@@ -856,6 +887,10 @@ export function useSkillSyncState(preferences: AppPreferences) {
   }
 
   function syncRows(rows: SkillListRow[]) {
+    if (syncing) {
+      return;
+    }
+
     if (!repoUrl.trim()) {
       setNotes((current) => current.concat(messages.repoRequiredAlert));
       return;
@@ -887,9 +922,7 @@ export function useSkillSyncState(preferences: AppPreferences) {
       return;
     }
 
-    startSync(() => {
-      void runSync(operations);
-    });
+    void runSync(operations);
   }
 
   function syncSelected() {
@@ -902,6 +935,10 @@ export function useSkillSyncState(preferences: AppPreferences) {
   }
 
   function refresh() {
+    if (syncing) {
+      return;
+    }
+
     startRefresh(() => {
       void loadAll(undefined, repoUrl, selectedOwner, "refresh");
     });
@@ -965,7 +1002,15 @@ export function useSkillSyncState(preferences: AppPreferences) {
       disposed = true;
       unlisten?.();
     };
-  }, [repoUrl, selectedOwner, repoUrlError, syncBlockedByPermission, selectedIds, reviewDecisions]);
+  }, [
+    repoUrl,
+    selectedOwner,
+    repoUrlError,
+    syncBlockedByPermission,
+    selectedIds,
+    reviewDecisions,
+    syncing
+  ]);
 
   return {
     messages,
@@ -1022,6 +1067,8 @@ export function useSkillSyncState(preferences: AppPreferences) {
     selectedDiffFilePath,
     setSelectedDiffFilePath,
     recentNotes,
+    syncNotice,
+    dismissSyncNotice: () => setSyncNotice(null),
     reviewDecisions,
     setReviewDecision,
     ignoreSkill,

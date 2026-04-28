@@ -21,7 +21,7 @@ directories across multiple Macs with GitHub as the shared source of truth.
 
 ## Current Scope
 
-Version `0.1.2` focuses on `skills` only.
+Version `0.1.3` focuses on `skills` only.
 
 Out of scope for this build:
 
@@ -118,11 +118,11 @@ Release steps:
    `src-tauri/Cargo.toml`
 2. Run `npm run release:check`
 3. Commit the version bump
-4. Push a tag such as `v0.1.2`
+4. Push a tag such as `v0.1.3`
 
 ```bash
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 The workflow uses the default `GITHUB_TOKEN`, so no extra secrets are required

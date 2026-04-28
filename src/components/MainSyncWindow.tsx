@@ -16,7 +16,7 @@ import {
   Trash2,
   X
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AppBrand } from "./AppBrand";
 import { formatActionLabel, formatStateLabel, getMessages } from "../lib/i18n";
 import { SkillDiffPanel } from "./SkillDiffPanel";
@@ -26,12 +26,12 @@ import { useSkillSyncState, type MainFilter } from "../state/useSkillSyncState";
 import type { AppPreferences, Language, SkillRow, SyncOperationType } from "../lib/types";
 
 const FILTERS: MainFilter[] = [
+  "all",
   "actionable",
   "changed",
   "conflicts",
   "pending-delete",
-  "ignored",
-  "all"
+  "ignored"
 ];
 
 function formatTimestamp(value?: number) {
@@ -114,6 +114,12 @@ function homeCopy(language: Language) {
       statusRemoteUnavailable: "GitHub 这次没有读成功，暂时不能判断哪些 skill 需要同步。可以点刷新重试。",
       statusNeedsWork: (count: number) => `有 ${count} 个 skill 需要你处理。`,
       statusReady: "检查完成，目前没有需要同步的 skill。",
+      topStatusSyncing: "同步中",
+      syncCompleteTitle: "同步完成",
+      syncCompleteMessage: (count: number) => `已处理 ${count} 个 skill，同步结果已刷新。`,
+      syncFailedTitle: "同步失败",
+      syncFailedMessage: "这次同步没有完成，请查看同步检查里的提示。",
+      dismissNotification: "关闭提示",
       waitingForGitHub: "等待 GitHub",
       syncCheckTitle: "同步检查",
       technicalDetailsTitle: "技术记录",
@@ -213,6 +219,12 @@ function homeCopy(language: Language) {
     statusRemoteUnavailable: "GitHub could not be read this time, so SkillSync is not judging sync changes yet. Refresh to retry.",
     statusNeedsWork: (count: number) => `${count} skill(s) need your attention.`,
     statusReady: "Check complete. No skills need sync right now.",
+    topStatusSyncing: "Syncing",
+    syncCompleteTitle: "Sync complete",
+    syncCompleteMessage: (count: number) => `${count} skill(s) processed. The sync results are refreshed.`,
+    syncFailedTitle: "Sync failed",
+    syncFailedMessage: "This sync did not complete. Check the sync panel for details.",
+    dismissNotification: "Dismiss notification",
     waitingForGitHub: "Waiting for GitHub",
     syncCheckTitle: "Sync check",
     technicalDetailsTitle: "Technical records",
@@ -402,6 +414,7 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
   const reviewActions = selectedRow && !selectedIgnored ? getReviewDecisionActions(selectedRow) : [];
   const setupVisible = state.onboardingStep !== "done" && !state.onboardingDismissed;
   const suggestedCount = state.rowsNeedingAction.length;
+  const repositoryConnected = Boolean(state.repoUrl.trim()) && !state.repoUrlError;
   const primaryCount = state.selectedCount || suggestedCount;
   const primaryLabel = state.selectedCount
     ? copy.syncSelected(state.selectedCount)
@@ -413,7 +426,7 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
     state.repoValidation?.fullName ??
     state.selectedRepository?.fullName ??
     state.repoUrl.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
-  const connectionTitle = state.repoUrl.trim() ? copy.repoReady : copy.repoMissing;
+  const connectionTitle = repositoryConnected ? copy.repoReady : copy.repoMissing;
   const userFacingNotes = state.recentNotes.filter((note) => !isTechnicalActivityNote(note));
   const technicalNotes = state.recentNotes.filter(isTechnicalActivityNote);
   const showTechnicalActivity =
@@ -431,9 +444,29 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
           ? copy.statusNeedsRepo
           : state.remoteLoadError
             ? copy.statusRemoteUnavailable
-            : suggestedCount
-              ? copy.statusNeedsWork(suggestedCount)
-              : copy.statusReady;
+              : suggestedCount
+                ? copy.statusNeedsWork(suggestedCount)
+                : copy.statusReady;
+  const syncNotice = state.syncNotice;
+  const syncNoticeTitle =
+    syncNotice?.status === "success" ? copy.syncCompleteTitle : copy.syncFailedTitle;
+  const syncNoticeMessage =
+    syncNotice?.status === "success"
+      ? copy.syncCompleteMessage(syncNotice.operationCount)
+      : syncNotice?.detail || copy.syncFailedMessage;
+
+  useEffect(() => {
+    if (!syncNotice) {
+      return;
+    }
+
+    const timeout = window.setTimeout(
+      () => state.dismissSyncNotice(),
+      syncNotice.status === "success" ? 3600 : 6000
+    );
+
+    return () => window.clearTimeout(timeout);
+  }, [syncNotice?.id]);
 
   function moveToIgnoredMessage(rows: SkillRow[]) {
     if (rows.length === 1) {
@@ -473,18 +506,24 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
           />
 
           <div className="sync-topbar-actions">
-            <div className={state.repoUrl.trim() ? "connection-pill connected" : "connection-pill"}>
+            <div className={repositoryConnected ? "connection-pill connected" : "connection-pill"}>
               <GitBranch aria-hidden="true" />
-              <span>{state.repoUrl.trim() ? copy.connected : copy.notConnected}</span>
+              <span>{repositoryConnected ? copy.connected : copy.notConnected}</span>
               {repoName ? <strong>{repoName}</strong> : null}
             </div>
+            {state.syncing ? (
+              <div className="operation-status-pill" role="status" aria-live="polite">
+                <RefreshCw aria-hidden="true" />
+                <span>{copy.topStatusSyncing}</span>
+              </div>
+            ) : null}
             <button
               className="icon-button quiet-icon-button"
               type="button"
               aria-label={messages.refresh}
               title={messages.refresh}
               onClick={state.refresh}
-              disabled={state.refreshing}
+              disabled={state.refreshing || state.syncing}
             >
               <RefreshCw />
             </button>
@@ -543,11 +582,11 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
                 ["connect", copy.stepConnect],
                 ["backup", copy.stepBackup]
               ].map(([step, label]) => {
-                const active = state.onboardingStep === step;
                 const complete =
                   (step === "discover" && state.localSkillCount > 0) ||
-                  (step === "connect" && Boolean(state.repoUrl.trim()) && !state.repoUrlError) ||
-                  (step === "backup" && !state.firstBackupRecommended && Boolean(state.repoUrl.trim()));
+                  (step === "connect" && repositoryConnected) ||
+                  (step === "backup" && !state.firstBackupRecommended && repositoryConnected);
+                const active = state.onboardingStep === step && !complete;
 
                 return (
                   <div
@@ -994,6 +1033,30 @@ export function MainSyncWindow({ preferences }: { preferences: AppPreferences })
           </>
         )}
       </main>
+      {syncNotice ? (
+        <section
+          className={`sync-toast ${syncNotice.status}`}
+          role="status"
+          aria-live="polite"
+        >
+          <span className="sync-toast-icon" aria-hidden="true">
+            {syncNotice.status === "success" ? <CheckCircle2 /> : <AlertTriangle />}
+          </span>
+          <span className="sync-toast-copy">
+            <strong>{syncNoticeTitle}</strong>
+            <small>{syncNoticeMessage}</small>
+          </span>
+          <button
+            className="sync-toast-close"
+            type="button"
+            aria-label={copy.dismissNotification}
+            title={copy.dismissNotification}
+            onClick={state.dismissSyncNotice}
+          >
+            <X />
+          </button>
+        </section>
+      ) : null}
       {pendingIgnoredRows.length ? (
         <div className="confirm-backdrop" role="presentation">
           <section

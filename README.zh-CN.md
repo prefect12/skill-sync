@@ -21,7 +21,7 @@ skill 目录，并以 GitHub 作为共享的事实来源。
 
 ## 当前范围
 
-版本 `0.1.0` 仅聚焦于 `skills`。
+版本 `0.1.3` 仅聚焦于 `skills`。
 
 当前版本不包含：
 
@@ -115,11 +115,11 @@ npm run release:check
    `src-tauri/Cargo.toml` 中的版本号
 2. 运行 `npm run release:check`
 3. 提交版本变更
-4. 推送类似 `v0.1.0` 的 tag
+4. 推送类似 `v0.1.3` 的 tag
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 当前这套流程使用默认的 `GITHUB_TOKEN`，所以发布未签名版本时不需要额外 secrets。

@@ -713,10 +713,14 @@ h3 {
 .status-pill {
   display: inline-flex;
   align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
   border-radius: 999px;
   padding: 5px 9px;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.2;
   border: 1px solid transparent;
   white-space: nowrap;
 }
@@ -1326,6 +1330,113 @@ h3 {
   font-size: 12px;
 }
 
+.operation-status-pill {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid rgba(10, 132, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(10, 132, 255, 0.11);
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.operation-status-pill svg {
+  width: 16px;
+  height: 16px;
+  animation: spin 1s linear infinite;
+}
+
+.sync-toast {
+  position: fixed;
+  top: 82px;
+  right: 24px;
+  z-index: 45;
+  width: min(380px, calc(100vw - 32px));
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 28px;
+  align-items: start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel-strong) 88%, transparent);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(22px);
+  animation: toast-slide-in 180ms ease-out;
+}
+
+.sync-toast-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(47, 158, 68, 0.12);
+  color: var(--success);
+}
+
+.sync-toast.error .sync-toast-icon {
+  background: rgba(208, 68, 55, 0.12);
+  color: var(--danger);
+}
+
+.sync-toast-icon svg,
+.sync-toast-close svg {
+  width: 17px;
+  height: 17px;
+}
+
+.sync-toast-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.sync-toast-copy strong {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.sync-toast-copy small {
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.sync-toast-close {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-soft);
+}
+
+.sync-toast-close:hover {
+  background: rgba(127, 140, 160, 0.12);
+  color: var(--text);
+}
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .quiet-icon-button {
   background: transparent;
   border-color: var(--line);
@@ -1642,7 +1753,7 @@ h3 {
   width: 100%;
   min-height: 48px;
   display: grid;
-  grid-template-columns: 24px 24px minmax(130px, 1fr) minmax(112px, auto) minmax(126px, auto);
+  grid-template-columns: 24px 24px minmax(130px, 1fr) max-content minmax(126px, auto);
   align-items: center;
   gap: 10px;
   padding: 7px 10px;
@@ -1672,6 +1783,10 @@ h3 {
 .finder-row.ignored .row-source-icon,
 .finder-row.ignored .status-pill {
   opacity: 0.64;
+}
+
+.finder-row .status-pill {
+  justify-self: start;
 }
 
 .row-source-icon {
@@ -1930,6 +2045,7 @@ h3 {
   }
 
   .connection-pill,
+  .operation-status-pill,
   .manual-repo-field,
   .setup-actions .primary-button,
   .setup-actions .secondary-button,
@@ -1953,6 +2069,13 @@ h3 {
   .finder-skill-list,
   .inspector-stack {
     overflow: visible;
+  }
+
+  .sync-toast {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+    width: auto;
   }
 
   .app-toolbar {
